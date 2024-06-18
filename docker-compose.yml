@@ -1,0 +1,21 @@
+version: '3.8'
+
+services:
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    ports:
+      - "8080:8080"
+    volumes:
+      - ./awesomeProject3:/awesomeProject3
+    environment:
+      - DB_DIALECT=sqlite3
+      - DEBUG=true
+      - REQUEST_FULL_SYNC=false
+    networks:
+      - app-network
+
+networks:
+  app-network:
+    driver: bridge
