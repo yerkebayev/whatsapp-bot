@@ -13,6 +13,7 @@ services:
       - DB_DIALECT=sqlite3
       - DEBUG=true
       - REQUEST_FULL_SYNC=false
+      - PROGRAM_ID=ADMIN
     networks:
       - app-network
 

@@ -95,8 +95,11 @@ func main() {
 	flag.Parse()
 
 	if *programID == "" {
-		fmt.Println("Program ID is required")
-		return
+		*programID = os.Getenv("PROGRAM_ID")
+		if *programID == "" {
+			fmt.Println("Program ID is required")
+			return
+		}
 	}
 
 	if *debugLogs {
