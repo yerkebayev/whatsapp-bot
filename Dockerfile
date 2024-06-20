@@ -46,5 +46,8 @@ RUN chmod +x /awesomeProject3-app
 # Set environment variable for Docker mode
 ENV DOCKER_MODE=true
 
+# Define a volume for the session data
+VOLUME ["/data"]
+
 # Run the application
 CMD ["/awesomeProject3-app"]
