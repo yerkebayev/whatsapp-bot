@@ -1,0 +1,25 @@
+### Send message
+POST http://localhost:8080/send
+Content-Type: application/json
+
+{
+  "JID": "77785080094",
+  "Text": "Hello"
+}
+
+### Check contact
+POST http://localhost:8080/check-user
+Content-Type: application/json
+
+{
+  "phone_number": "77785080094"
+}
+
+### Send message
+POST http://sandbox.courstore.com:8080/send
+Content-Type: application/json
+
+{
+  "JID": "77071025816",
+  "Text": "Hello"
+}
