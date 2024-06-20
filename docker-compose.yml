@@ -8,12 +8,13 @@ services:
     ports:
       - "8080:8080"
     volumes:
-      - ./awesomeProject3:/awesomeProject3
+      - ./data:/data
+      - ./media:/media
     environment:
       - DB_DIALECT=sqlite3
       - DEBUG=true
       - REQUEST_FULL_SYNC=false
-      - PROGRAM_ID=ADMIN
+      - PROGRAM_ID=111
     networks:
       - app-network
 
