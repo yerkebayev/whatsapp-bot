@@ -219,7 +219,7 @@ func main() {
 	router.HandleFunc("/get-all-messages", getAllMessagesHandler) // Новый маршрут для получения всех сообщений
 	router.HandleFunc("/check-user", checkUserHandler)            // Новый маршрут для проверки номера телефона
 
-	go http.ListenAndServe(":8080", router)
+	go http.ListenAndServe(":8088", router)
 
 	if os.Getenv("DOCKER_MODE") == "true" {
 		select {} // Prevent the application from exiting in Docker mode
@@ -517,11 +517,13 @@ func receiveHandler(rawEvt interface{}) {
 			text = event.Message.GetConversation()
 		}
 
+		// Save message to CSV
 		err := writeMessageToCSV(*programID, event.Info.ID, event.Info.SourceString(), msgType, text, event.Info.Timestamp.String())
 		if err != nil {
 			log.Errorf("Failed to write message to CSV: %v", err)
 		}
 
+		// Save message to Database
 		err = writeMessageToDB(*programID, event.Info.ID, event.Info.SourceString(), msgType, text, event.Info.Timestamp.String())
 		if err != nil {
 			log.Errorf("Failed to write message to database: %v", err)
@@ -690,7 +692,7 @@ func writeMessageToCSV(programID, id, phone, msgType, text, dateTime string) err
 	csvMutex.Lock()
 	defer csvMutex.Unlock()
 
-	file, err := os.OpenFile("messages.csv", os.O_APPEND|os.O_WRONLY|os.O_CREATE, 0600)
+	file, err := os.OpenFile("/data/messages.csv", os.O_APPEND|os.O_WRONLY|os.O_CREATE, 0600)
 	if err != nil {
 		return err
 	}
@@ -702,6 +704,7 @@ func writeMessageToCSV(programID, id, phone, msgType, text, dateTime string) err
 	record := []string{programID, id, phone, msgType, text, dateTime}
 	return writer.Write(record)
 }
+
 func saveMediaFile(filePath string, data []byte) error {
 	return os.WriteFile(filePath, data, 0600)
 }
