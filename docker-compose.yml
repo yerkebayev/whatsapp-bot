@@ -15,6 +15,7 @@ services:
       - DEBUG=true
       - REQUEST_FULL_SYNC=false
       - PROGRAM_ID=ADMIN
+      - DEPO_URL=https://devapi.courstore.com/v1/dialog
     networks:
       - app-network
 

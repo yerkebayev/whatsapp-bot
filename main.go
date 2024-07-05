@@ -119,6 +119,10 @@ func main() {
 		flag.Set("program-id", envProgramID)
 	}
 
+	if envDepositoryUrl := os.Getenv("DEPO_URL"); envDepositoryUrl != "" {
+		flag.Set("depo-url", envDepositoryUrl)
+	}
+
 	flag.Parse()
 
 	if *programID == "" {
