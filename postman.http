@@ -12,14 +12,14 @@ POST http://localhost:8080/check-user
 Content-Type: application/json
 
 {
-  "phone_number": "77785080094"
+  "phone_number": "123123123"
 }
 
 ### Send message
-POST http://sandbox.courstore.com:8080/send
+POST http://sandbox.courstore.com:8081/send
 Content-Type: application/json
 
 {
-  "JID": "77071025816",
-  "Text": "Hello"
+  "jid": "77785080094",
+  "text": "Choose an option:"
 }

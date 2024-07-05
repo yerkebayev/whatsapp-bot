@@ -6,7 +6,7 @@ services:
       context: .
       dockerfile: Dockerfile
     ports:
-      - "8088:8088"
+      - "8088:8080"
     volumes:
       - ./data:/data
       - ./media:/media
@@ -14,7 +14,7 @@ services:
       - DB_DIALECT=sqlite3
       - DEBUG=true
       - REQUEST_FULL_SYNC=false
-      - PROGRAM_ID=111
+      - PROGRAM_ID=ADMIN
     networks:
       - app-network
 
