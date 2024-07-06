@@ -2,7 +2,6 @@ package main
 
 import (
 	"bufio"
-	"bytes"
 	"context"
 	"database/sql"
 	"encoding/csv"
@@ -26,7 +25,6 @@ import (
 	"github.com/mdp/qrterminal/v3"
 	"google.golang.org/protobuf/proto"
 
-	"github.com/robfig/cron"
 	"go.mau.fi/whatsmeow"
 	"go.mau.fi/whatsmeow/appstate"
 	waBinary "go.mau.fi/whatsmeow/binary"
@@ -51,8 +49,6 @@ var (
 	historySyncID   int32
 	startupTime     = time.Now().Unix()
 	programID       = flag.String("program-id", "", "Unique identifier for the program") // Initialize as an empty string
-	mainPhone       = ""
-	depositoryUrl   = flag.String("depo-url", "https://devapi.courstore.com/v1/dialog", "Host for saving all messages")
 )
 
 type HostInfo struct {
@@ -60,24 +56,6 @@ type HostInfo struct {
 	Phone string `json:"phone"`
 	Host  string `json:"host"`
 	Port  string `json:"port"`
-}
-
-type Message struct {
-	programID string
-	messageID string
-	phone     string
-	msgType   string
-	text      string
-	dateTime  string
-}
-
-type CDMessage struct {
-	ClientId    string `json:"client_id"`
-	SystemId    string `json:"system_id"`
-	Type        string `json:"type"`
-	Message     string `json:"message"`
-	FromClient  bool   `json:"from_client"`
-	MessageType string `json:"message_type"`
 }
 
 var hostData = []HostInfo{
@@ -117,10 +95,6 @@ func main() {
 	// Check if PROGRAM_ID environment variable is set and use it as the default value for program-id flag
 	if envProgramID := os.Getenv("PROGRAM_ID"); envProgramID != "" {
 		flag.Set("program-id", envProgramID)
-	}
-
-	if envDepositoryUrl := os.Getenv("DEPO_URL"); envDepositoryUrl != "" {
-		flag.Set("depo-url", envDepositoryUrl)
 	}
 
 	flag.Parse()
@@ -166,10 +140,6 @@ func main() {
 		log.Errorf("WhatsApp client is not initialized")
 		return
 	}
-
-	c := cron.New()
-	c.AddFunc("0 * * * *", func() { sendRecordToCentralDepository(10) })
-	c.Start()
 
 	var isWaitingForPair atomic.Bool
 	client.PrePairCallback = func(jid types.JID, platform, businessName string) bool {
@@ -249,7 +219,7 @@ func main() {
 	router.HandleFunc("/get-all-messages", getAllMessagesHandler) // Новый маршрут для получения всех сообщений
 	router.HandleFunc("/check-user", checkUserHandler)            // Новый маршрут для проверки номера телефона
 
-	go http.ListenAndServe(":8080", router)
+	go http.ListenAndServe(":8088", router)
 
 	if os.Getenv("DOCKER_MODE") == "true" {
 		select {} // Prevent the application from exiting in Docker mode
@@ -311,142 +281,6 @@ func writeMessageToDB(programID, messageID, phone, msgType, text, dateTime strin
 	}
 	log.Infof("Message inserted into database: %s", messageID)
 	return nil
-}
-
-func deleteMessageFromDB(messageId string) (bool, error) {
-	db, err := sql.Open(*dbDialect, *dbAddress)
-	if err != nil {
-		return false, fmt.Errorf("failed to connect to database: %v", err)
-	}
-	defer db.Close()
-	query := "DELETE FROM messages WHERE message_id=$1"
-	_, err = db.Exec(query, messageId)
-	if err != nil {
-		log.Errorf("Failed to delete message from database: %v", err)
-		return false, fmt.Errorf("failed to delete message from database: %v", err)
-	}
-	return true, nil
-}
-
-func sendRecordToCentralDepository(recordCount int) error {
-	db, err := sql.Open(*dbDialect, *dbAddress)
-	if err != nil {
-		return fmt.Errorf("failed to connect to database: %v", err)
-	}
-	defer db.Close()
-	if mainPhone == "" {
-		row, err := db.Query("SELECT jid FROM whatsmeow_device limit 1")
-		if err != nil {
-			mainPhone = ""
-		}
-		defer row.Close()
-		for row.Next() {
-			var jid = ""
-			if err := row.Scan(&jid); err != nil {
-				mainPhone = ""
-			}
-			mainPhone = SubstringBefore(jid, ":")
-		}
-	}
-	log.Infof("Jid = %s", mainPhone)
-	rows, err := db.Query("SELECT program_id, message_id, phone, message_type, text, date_time FROM messages limit ?", recordCount)
-	if err != nil {
-		return fmt.Errorf("Failed to query messages: %v", err)
-	}
-	defer rows.Close()
-
-	var messages []Message
-	for rows.Next() {
-		var programID, messageID, phone, msgType, text, dateTime string
-		if err := rows.Scan(&programID, &messageID, &phone, &msgType, &text, &dateTime); err != nil {
-			return fmt.Errorf("Failed to scan message: %v", err)
-		}
-		messages = append(messages, Message{
-			messageID: messageID,
-			programID: programID,
-			phone:     phone,
-			msgType:   msgType,
-			text:      text,
-			dateTime:  dateTime,
-		})
-		log.Infof("Message ID: %s", messageID)
-	}
-	for _, message := range messages {
-		if message.text == "" {
-			_, err := deleteMessageFromDB(message.messageID)
-			if err != nil {
-				log.Errorf("Failed to delete message from database: %v", err)
-			}
-		} else {
-			var clientId = SubstringBefore(message.phone, "@")
-			var fromMe = clientId == mainPhone
-
-			if fromMe {
-				clientId = SubstringBefore(SubstringAfter(message.phone, " in "), "@")
-			}
-			data := &CDMessage{
-				ClientId:    clientId,
-				SystemId:    *programID,
-				Type:        message.msgType,
-				Message:     message.text,
-				FromClient:  !fromMe,
-				MessageType: "test",
-			}
-			jsonData, err := json.Marshal(data)
-			if err != nil {
-				log.Errorf("Failed to generate JSON: %v", err)
-			} else {
-				log.Infof("JSON: %s", string(jsonData))
-
-				r, err := http.NewRequest("POST", *depositoryUrl, bytes.NewBuffer(jsonData))
-				if err != nil {
-					log.Errorf("Failed to create request: %v", err)
-				}
-
-				r.Header.Add("Content-Type", "application/json")
-
-				client := &http.Client{}
-				res, err := client.Do(r)
-				if err != nil {
-					log.Errorf("Failed to create request: %v", err)
-				}
-
-				defer res.Body.Close()
-
-				post := res.Body
-
-				if res.StatusCode != http.StatusCreated {
-					log.Errorf("Failed to create request: %v", err)
-				} else {
-					log.Infof("Create record with ID: %s", post)
-					_, err := deleteMessageFromDB(message.messageID)
-					if err != nil {
-						log.Errorf("Failed to delete message from database: %v", err)
-					}
-				}
-
-			}
-		}
-	}
-	messages = nil
-	return nil
-
-}
-
-func SubstringBefore(str string, sep string) string {
-	idx := strings.Index(str, sep)
-	if idx == -1 {
-		return str
-	}
-	return str[:idx]
-}
-
-func SubstringAfter(str string, sep string) string {
-	idx := strings.Index(str, sep)
-	if idx == -1 {
-		return str
-	}
-	return str[idx+len(sep):]
 }
 
 func parseJID(arg string) (types.JID, bool) {
@@ -596,8 +430,9 @@ func receiveHandler(rawEvt interface{}) {
 
 		log.Infof("Received message %s from %s (%s): %+v", event.Info.ID, event.Info.SourceString(), strings.Join(metaParts, ", "), event.Message)
 
-		var filePath, msgType string
+		var filePath, msgType, text string
 
+		// Handle different message types
 		if img := event.Message.GetImageMessage(); img != nil {
 			data, err := client.Download(img)
 			if err != nil {
@@ -607,9 +442,8 @@ func receiveHandler(rawEvt interface{}) {
 			exts, _ := mime.ExtensionsByType(img.GetMimetype())
 			if len(exts) == 0 {
 				log.Warnf("Failed to determine file extension for mimetype: %s, using fallback .jpg", img.GetMimetype())
-				exts = append(exts, ".jpg") // Fallback extension for images
+				exts = append(exts, ".jpg")
 			}
-			log.Infof("Image file extension determined: %s", exts[0])
 			filePath = fmt.Sprintf("media/image/%s%s", event.Info.ID, exts[0])
 			err = saveMediaFile(filePath, data)
 			if err != nil {
@@ -618,6 +452,7 @@ func receiveHandler(rawEvt interface{}) {
 			}
 			log.Infof("Saved image in message to %s", filePath)
 			msgType = "image"
+			text = filePath
 		} else if vid := event.Message.GetVideoMessage(); vid != nil {
 			data, err := client.Download(vid)
 			if err != nil {
@@ -627,9 +462,8 @@ func receiveHandler(rawEvt interface{}) {
 			exts, _ := mime.ExtensionsByType(vid.GetMimetype())
 			if len(exts) == 0 {
 				log.Warnf("Failed to determine file extension for mimetype: %s, using fallback .mp4", vid.GetMimetype())
-				exts = append(exts, ".mp4") // Fallback extension for videos
+				exts = append(exts, ".mp4")
 			}
-			log.Infof("Video file extension determined: %s", exts[0])
 			filePath = fmt.Sprintf("media/video/%s%s", event.Info.ID, exts[0])
 			err = saveMediaFile(filePath, data)
 			if err != nil {
@@ -638,6 +472,7 @@ func receiveHandler(rawEvt interface{}) {
 			}
 			log.Infof("Saved video in message to %s", filePath)
 			msgType = "video"
+			text = filePath
 		} else if aud := event.Message.GetAudioMessage(); aud != nil {
 			data, err := client.Download(aud)
 			if err != nil {
@@ -652,6 +487,7 @@ func receiveHandler(rawEvt interface{}) {
 			}
 			log.Infof("Saved audio in message to %s", filePath)
 			msgType = "audio"
+			text = filePath
 		} else if doc := event.Message.GetDocumentMessage(); doc != nil {
 			data, err := client.Download(doc)
 			if err != nil {
@@ -661,9 +497,8 @@ func receiveHandler(rawEvt interface{}) {
 			exts, _ := mime.ExtensionsByType(doc.GetMimetype())
 			if len(exts) == 0 {
 				log.Warnf("Failed to determine file extension for mimetype: %s, using fallback .pdf", doc.GetMimetype())
-				exts = append(exts, ".pdf") // Fallback extension for documents
+				exts = append(exts, ".pdf")
 			}
-			log.Infof("Document file extension determined: %s", exts[0])
 			filePath = fmt.Sprintf("media/document/%s%s", event.Info.ID, exts[0])
 			err = saveMediaFile(filePath, data)
 			if err != nil {
@@ -672,15 +507,19 @@ func receiveHandler(rawEvt interface{}) {
 			}
 			log.Infof("Saved document in message to %s", filePath)
 			msgType = "document"
-		} else {
-			msgType = event.Info.Type
-		}
-
-		var text string
-		if filePath != "" {
 			text = filePath
 		} else {
-			text = event.Message.GetConversation()
+			if extMsg := event.Message.GetExtendedTextMessage(); extMsg != nil {
+				text = extMsg.GetText()
+				// Check for quoted/replied messages
+				if quotedMsg := extMsg.GetContextInfo().GetQuotedMessage(); quotedMsg != nil {
+					quotedText := quotedMsg.GetConversation()
+					text = fmt.Sprintf("%s (replied to: %s)", text, quotedText)
+				}
+			} else {
+				text = event.Message.GetConversation()
+			}
+			msgType = event.Info.Type
 		}
 
 		// Save message to CSV
