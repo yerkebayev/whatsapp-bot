@@ -384,6 +384,9 @@ func sendRecordToCentralDepository(recordCount int) error {
 			if fromMe {
 				clientId = SubstringBefore(SubstringAfter(message.phone, " in "), "@")
 			}
+			if strings.Contains(clientId, ":") {
+				clientId = SubstringBefore(message.phone, ":")
+			}
 			data := &CDMessage{
 				ClientId:    clientId,
 				SystemId:    *programID,
