@@ -248,6 +248,7 @@ func main() {
 	router.HandleFunc("/get-host-info", getHostInfoHandler)       // Новый маршрут
 	router.HandleFunc("/get-all-messages", getAllMessagesHandler) // Новый маршрут для получения всех сообщений
 	router.HandleFunc("/check-user", checkUserHandler)            // Новый маршрут для проверки номера телефона
+	router.HandleFunc("/get-media", mediaHandler)                 // Новый маршрут для получение файлов
 
 	go http.ListenAndServe(":8080", router)
 
@@ -726,6 +727,173 @@ func qrTextHandler(w http.ResponseWriter, r *http.Request) {
 func qrPhotoHandler(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "image/png")
 	http.ServeFile(w, r, "qr_code.png")
+}
+
+func mediaHandler(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		Type string `json:"type"`
+		Path string `json:"path"`
+	}
+
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	w.Header().Set("Content-Type", getExtensionType(req.Type, req.Path))
+
+	http.ServeFile(w, r, "/"+req.Path)
+}
+
+func getExtensionType(fileType, filePath string) string {
+	parts := strings.Split(filePath, ".")
+	ext := strings.ToLower(parts[len(parts)-1])
+	switch fileType {
+	case "image":
+		{
+			switch ext {
+			case "apng":
+				return "image/apng"
+
+			case "avif":
+				return "image/avif"
+
+			case "gif", "giff":
+				return "image/gif"
+
+			case "jpeg", "jpg":
+				return "image/jpeg"
+
+			case "png":
+				return "image/png"
+
+			case "svg":
+				return "image/svg+xml"
+
+			case "webp":
+				return "image/webp"
+
+			case "bmp":
+				return "image/bmp"
+
+			case "ico":
+				return "image/x-icon"
+
+			case "tiff":
+				return "image/tiff"
+			default:
+				return "image/png"
+			}
+		}
+	case "video":
+		{
+
+			switch ext {
+			case "mpeg":
+				return "video/mpeg"
+
+			case "mp4":
+				return "video/mp4"
+
+			case "ogg":
+				return "video/ogg"
+
+			case "qt":
+				return "video/quicktime"
+
+			case "webm":
+				return "video/webm"
+
+			case "wmv":
+				return "video/x-ms-wmv"
+
+			case "flv":
+				return "video/x-flv"
+
+			case "avi":
+				return "video/x-msvideo"
+
+			case "3gpp":
+				return "video/3gpp"
+
+			case "3gpp2":
+				return "video/3gpp2"
+			default:
+				return "video/mp4"
+			}
+		}
+	case "audio":
+		{
+			switch ext {
+			case "mulaw":
+				return "audio/basic"
+
+			case "l24":
+				return "audio/L24"
+
+			case "mp4":
+				return "audio/mp4"
+
+			case "aac":
+				return "audio/aac"
+
+			case "mpeg", "mp3":
+				return "audio/mpeg"
+
+			case "ogg":
+				return "audio/ogg"
+
+			case "vorbis":
+				return "audio/vorbis"
+
+			case "wma":
+				return "audio/x-ms-wma"
+
+			case "wax":
+				return "audio/x-ms-wax"
+
+			case "ra":
+				return "audio/vnd.rn-realaudio"
+
+			case "wav":
+				return "audio/vnd.wave"
+
+			case "webm":
+				return "audio/webm"
+			default:
+				return "audio/webm"
+			}
+		}
+	case "document":
+		{
+			switch ext {
+			case "pdf":
+				return "application/pdf"
+
+			case "zip":
+				return "application/zip"
+
+			case "csv":
+				return "text/csv"
+
+			case "xls", "xlsx":
+				return "application/vnd.ms-excel"
+
+			case "ppt", "pptx":
+				return "application/vnd.ms-powerpoint"
+
+			case "doc", "docx":
+				return "application/msword"
+
+			case "rar":
+				return "application/vnd.rar"
+			default:
+				return "text/html"
+			}
+		}
+	default:
+		return "text/html"
+	}
 }
 
 func sendMessageHandler(w http.ResponseWriter, r *http.Request) {
