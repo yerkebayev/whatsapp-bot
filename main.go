@@ -10,6 +10,7 @@ import (
 	"encoding/json"
 	"flag"
 	"fmt"
+	"github.com/mdp/qrterminal/v3"
 	"github.com/skip2/go-qrcode"
 	"io/ioutil"
 	"mime"
@@ -23,7 +24,6 @@ import (
 	"time"
 
 	_ "github.com/mattn/go-sqlite3"
-	"github.com/mdp/qrterminal/v3"
 	"google.golang.org/protobuf/proto"
 
 	"github.com/robfig/cron"
@@ -48,11 +48,11 @@ var (
 	dbAddress       = flag.String("db-address", "file:/data/mdtest.db?_foreign_keys=on", "Database address")
 	requestFullSync = flag.Bool("request-full-sync", false, "Request full (1 year) history sync when logging in?")
 	pairRejectChan  = make(chan bool, 1)
-	historySyncID   int32
-	startupTime     = time.Now().Unix()
-	programID       = flag.String("program-id", "", "Unique identifier for the program") // Initialize as an empty string
-	mainPhone       = ""
-	depositoryUrl   = flag.String("depo-url", "https://devapi.courstore.com/v1/dialog", "Host for saving all messages")
+	//historySyncID   int32
+	//startupTime     = time.Now().Unix()
+	programID     = flag.String("program-id", "", "Unique identifier for the program") // Initialize as an empty string
+	mainPhone     = ""
+	depositoryUrl = flag.String("depo-url", "https://devapi.courstore.com/v1/dialog", "Host for saving all messages")
 )
 
 type HostInfo struct {
@@ -182,7 +182,7 @@ func main() {
 				log.Infof("Rejecting pair")
 				return false
 			}
-		case <-time.After(3 * time.Second):
+			//case <-time.After(60 * time.Second):
 		}
 		log.Infof("Accepting pair")
 		return true
@@ -221,7 +221,10 @@ func main() {
 						return
 					}
 
-					log.Infof("QR code saved as text and image")
+					log.Infof("QR code saved as text and image %s", time.Now().Format(time.RFC3339))
+
+					// Exit the loop after generating the QR code once
+					break
 				} else {
 					log.Infof("QR channel result: %s", evt.Event)
 				}
