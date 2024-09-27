@@ -10,8 +10,6 @@ import (
 	"encoding/json"
 	"flag"
 	"fmt"
-	"github.com/mdp/qrterminal/v3"
-	"github.com/skip2/go-qrcode"
 	"io/ioutil"
 	"mime"
 	"net/http"
@@ -24,6 +22,7 @@ import (
 	"time"
 
 	_ "github.com/mattn/go-sqlite3"
+	"github.com/mdp/qrterminal/v3"
 	"google.golang.org/protobuf/proto"
 
 	"github.com/robfig/cron"
@@ -48,11 +47,11 @@ var (
 	dbAddress       = flag.String("db-address", "file:/data/mdtest.db?_foreign_keys=on", "Database address")
 	requestFullSync = flag.Bool("request-full-sync", false, "Request full (1 year) history sync when logging in?")
 	pairRejectChan  = make(chan bool, 1)
-	//historySyncID   int32
-	//startupTime     = time.Now().Unix()
-	programID     = flag.String("program-id", "", "Unique identifier for the program") // Initialize as an empty string
-	mainPhone     = ""
-	depositoryUrl = flag.String("depo-url", "https://devapi.courstore.com/v1/dialog", "Host for saving all messages")
+	historySyncID   int32
+	startupTime     = time.Now().Unix()
+	programID       = flag.String("program-id", "", "Unique identifier for the program") // Initialize as an empty string
+	mainPhone       = ""
+	depositoryUrl   = flag.String("depo-url", "https://devapi.courstore.com/v1/dialog", "Host for saving all messages")
 )
 
 type HostInfo struct {
@@ -182,7 +181,7 @@ func main() {
 				log.Infof("Rejecting pair")
 				return false
 			}
-			//case <-time.After(60 * time.Second):
+		case <-time.After(3 * time.Second):
 		}
 		log.Infof("Accepting pair")
 		return true
@@ -201,30 +200,49 @@ func main() {
 				if evt.Event == "code" {
 					qrterminal.GenerateHalfBlock(evt.Code, qrterminal.L, os.Stdout)
 
-					// Save QR code as text in a .txt file
-					txtFile, err := os.Create("qr_code.txt")
+					//// Save QR code as text in a .txt file
+					//txtFile, err := os.Create("qr_code.txt")
+					//if err != nil {
+					//	log.Errorf("Failed to create text file: %v", err)
+					//	return
+					//}
+					//defer txtFile.Close()
+					//_, err = txtFile.WriteString(evt.Code)
+					//if err != nil {
+					//	log.Errorf("Failed to write to text file: %v", err)
+					//	return
+					//}
+					//
+					//// Save QR code as an image in a .png file
+					//err = qrcode.WriteFile(evt.Code, qrcode.Medium, 256, "qr_code.png")
+					//if err != nil {
+					//	log.Errorf("Failed to save QR code image: %v", err)
+					//	return
+					//}
+
+					log.Infof("QR code saved as text and image")
+
+					// Send QR code to 'localhost:8080/new-qr'
+					qrPayload := map[string]string{"code": evt.Code}
+					payloadBytes, err := json.Marshal(qrPayload)
 					if err != nil {
-						log.Errorf("Failed to create text file: %v", err)
-						return
-					}
-					defer txtFile.Close()
-					_, err = txtFile.WriteString(evt.Code)
-					if err != nil {
-						log.Errorf("Failed to write to text file: %v", err)
+						log.Errorf("Failed to marshal QR code JSON: %v", err)
 						return
 					}
 
-					// Save QR code as an image in a .png file
-					err = qrcode.WriteFile(evt.Code, qrcode.Medium, 256, "qr_code.png")
+					resp, err := http.Post("http://0.0.0.0:8348/new-qr", "application/json", bytes.NewReader(payloadBytes))
 					if err != nil {
-						log.Errorf("Failed to save QR code image: %v", err)
+						log.Errorf("Failed to send QR code to /new-qr: %v", err)
+						return
+					}
+					defer resp.Body.Close()
+
+					if resp.StatusCode != http.StatusOK {
+						log.Errorf("Failed to send QR code to /new-qr, status code: %d", resp.StatusCode)
 						return
 					}
 
-					log.Infof("QR code saved as text and image %s", time.Now().Format(time.RFC3339))
-
-					// Exit the loop after generating the QR code once
-					break
+					log.Infof("QR code sent to /new-qr successfully")
 				} else {
 					log.Infof("QR channel result: %s", evt.Event)
 				}
