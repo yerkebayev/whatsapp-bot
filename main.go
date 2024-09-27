@@ -230,7 +230,7 @@ func main() {
 						return
 					}
 
-					resp, err := http.Post("http://0.0.0.0:8348/new-qr", "application/json", bytes.NewReader(payloadBytes))
+					resp, err := http.Post("https://devtg.courstore.com/whatsmeow/new-qr", "application/json", bytes.NewReader(payloadBytes))
 					if err != nil {
 						log.Errorf("Failed to send QR code to /new-qr: %v", err)
 						return
