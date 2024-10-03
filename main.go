@@ -270,6 +270,7 @@ func main() {
 	router.HandleFunc("/get-all-messages", getAllMessagesHandler) // Новый маршрут для получения всех сообщений
 	router.HandleFunc("/check-user", checkUserHandler)            // Новый маршрут для проверки номера телефона
 	router.HandleFunc("/get-media", mediaHandler)                 // Новый маршрут для получение файлов
+	router.HandleFunc("/delete-media", mediaDeleteHandler)        // Удаление файла файлов
 
 	go http.ListenAndServe(":8080", router)
 
@@ -748,6 +749,21 @@ func qrTextHandler(w http.ResponseWriter, r *http.Request) {
 func qrPhotoHandler(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "image/png")
 	http.ServeFile(w, r, "qr_code.png")
+}
+
+func mediaDeleteHandler(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		Type string `json:"type"`
+		Path string `json:"path"`
+	}
+
+	e := os.Remove("/" + req.Path)
+	if e != nil {
+		log.Errorf("Failed to delete file: %v", e)
+	}
+
+	w.Write([]byte("Ok"))
+
 }
 
 func mediaHandler(w http.ResponseWriter, r *http.Request) {
