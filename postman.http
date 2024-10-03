@@ -12,7 +12,7 @@ POST http://localhost:8080/check-user
 Content-Type: application/json
 
 {
-  "phone_number": "123123123"
+  "phone_number": "+84913248745"
 }
 
 ### Send message
