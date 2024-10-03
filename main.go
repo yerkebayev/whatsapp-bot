@@ -52,6 +52,7 @@ var (
 	programID       = flag.String("program-id", "", "Unique identifier for the program") // Initialize as an empty string
 	mainPhone       = ""
 	depositoryUrl   = flag.String("depo-url", "https://devapi.courstore.com/v1/dialog", "Host for saving all messages")
+	tgUrl           = flag.String("tg-url", "https://devtg.courstore.com/", "Host for reconnecting")
 )
 
 type HostInfo struct {
@@ -120,6 +121,10 @@ func main() {
 
 	if envDepositoryUrl := os.Getenv("DEPO_URL"); envDepositoryUrl != "" {
 		flag.Set("depo-url", envDepositoryUrl)
+	}
+
+	if envTgUrl := os.Getenv("TG_URL"); envTgUrl != "" {
+		flag.Set("tg-url", envTgUrl)
 	}
 
 	flag.Parse()
@@ -230,7 +235,7 @@ func main() {
 						return
 					}
 
-					resp, err := http.Post("https://devtg.courstore.com/whatsmeow/new-qr", "application/json", bytes.NewReader(payloadBytes))
+					resp, err := http.Post(*tgUrl+"whatsmeow/new-qr", "application/json", bytes.NewReader(payloadBytes))
 					if err != nil {
 						log.Errorf("Failed to send QR code to /new-qr: %v", err)
 						return

@@ -16,6 +16,7 @@ services:
       - REQUEST_FULL_SYNC=false
       - PROGRAM_ID=ADMIN
       - DEPO_URL=https://devapi.courstore.com/v1/dialog
+      - TG_URL=https://devtg.courstore.com/
     networks:
       - app-network
 
