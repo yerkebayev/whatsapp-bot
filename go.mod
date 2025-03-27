@@ -6,7 +6,6 @@ require (
 	github.com/mattn/go-sqlite3 v1.14.22
 	github.com/mdp/qrterminal/v3 v3.2.0
 	github.com/robfig/cron v1.2.0
-	github.com/skip2/go-qrcode v0.0.0-20200617195104-da1b6568686e
 	go.mau.fi/whatsmeow v0.0.0-20240603101645-64bc969fbe78
 	google.golang.org/protobuf v1.34.2
 )

@@ -10,8 +10,10 @@ import (
 	"encoding/json"
 	"flag"
 	"fmt"
+	"io"
 	"io/ioutil"
 	"mime"
+	"mime/multipart"
 	"net/http"
 	"os"
 	"os/signal"
@@ -52,6 +54,7 @@ var (
 	programID       = flag.String("program-id", "", "Unique identifier for the program") // Initialize as an empty string
 	mainPhone       = ""
 	depositoryUrl   = flag.String("depo-url", "https://devapi.courstore.com/v1/dialog", "Host for saving all messages")
+	apiUrl          = flag.String("api-url", "https://devapi.courstore.com/v1", "Host for API")
 	tgUrl           = flag.String("tg-url", "https://devtg.courstore.com/", "Host for reconnecting")
 )
 
@@ -121,6 +124,10 @@ func main() {
 
 	if envDepositoryUrl := os.Getenv("DEPO_URL"); envDepositoryUrl != "" {
 		flag.Set("depo-url", envDepositoryUrl)
+	}
+
+	if apiUrl := os.Getenv("API_URL"); apiUrl != "" {
+		flag.Set("api-url", apiUrl)
 	}
 
 	if envTgUrl := os.Getenv("TG_URL"); envTgUrl != "" {
@@ -354,6 +361,45 @@ func deleteMessageFromDB(messageId string) (bool, error) {
 		return false, fmt.Errorf("failed to delete message from database: %v", err)
 	}
 	return true, nil
+}
+func fetchAndUploadProfilePhoto(client *whatsmeow.Client, jid types.JID) {
+	info, err := client.GetProfilePictureInfo(jid, &whatsmeow.GetProfilePictureParams{})
+	if err != nil {
+		fmt.Printf("Error getting profile photo info for %s: %v\n", jid.String(), err)
+		return
+	}
+	if info == nil {
+		// Possibly no profile photo or no permission
+		fmt.Printf("No profile photo found for %s\n", jid.String())
+		return
+	}
+
+	// upload
+	var buf bytes.Buffer
+	writer := multipart.NewWriter(&buf)
+
+	writer.WriteField("phone", jid.User)
+	writer.WriteField("profile_url", info.URL)
+	writer.Close()
+
+	// Create request
+	url := *apiUrl + "/files/upload_whatsapp_profile"
+	req, err := http.NewRequest("POST", url, &buf)
+	if err != nil {
+		panic(err)
+	}
+	req.Header.Set("Content-Type", writer.FormDataContentType())
+
+	// Send request
+	httpClient := &http.Client{}
+	resp, err := httpClient.Do(req)
+	if err != nil {
+		panic(err)
+	}
+	defer resp.Body.Close()
+
+	fmt.Printf("Response status: %s\n", resp.Status)
+	println(info.URL)
 }
 
 func sendRecordToCentralDepository(recordCount int) error {
@@ -718,6 +764,10 @@ func receiveHandler(rawEvt interface{}) {
 			}
 			msgType = event.Info.Type
 		}
+
+		// Fetch profile photo
+		senderJID := event.Info.Sender
+		fetchAndUploadProfilePhoto(client, senderJID)
 
 		// Save message to CSV
 		err := writeMessageToCSV(*programID, event.Info.ID, event.Info.SourceString(), msgType, text, event.Info.Timestamp.String())
