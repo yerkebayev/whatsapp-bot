@@ -154,7 +154,8 @@ func main() {
 	log = waLog.Stdout("Main", logLevel, true)
 
 	dbLog := waLog.Stdout("Database", logLevel, true)
-	storeContainer, err := sqlstore.New(*dbDialect, *dbAddress, dbLog)
+	ctx := context.Background()
+	storeContainer, err := sqlstore.New(ctx, *dbDialect, *dbAddress, dbLog)
 	if err != nil {
 		log.Errorf("Failed to connect to database: %v", err)
 		return
@@ -165,7 +166,7 @@ func main() {
 		return
 	}
 
-	device, err := storeContainer.GetFirstDevice()
+	device, err := storeContainer.GetFirstDevice(ctx)
 	if err != nil {
 		log.Errorf("Failed to get device: %v", err)
 		return
@@ -544,13 +545,14 @@ func parseJID(arg string) (types.JID, bool) {
 	}
 }
 func handleCmd(cmd string, args []string) {
+	ctx := context.Background()
 	switch cmd {
 	case "pair-phone":
 		if len(args) < 1 {
 			log.Errorf("Usage: pair-phone <number>")
 			return
 		}
-		linkingCode, err := client.PairPhone(args[0], true, whatsmeow.PairClientChrome, "Chrome (Linux)")
+		linkingCode, err := client.PairPhone(ctx, args[0], true, whatsmeow.PairClientChrome, "Chrome (Linux)")
 		if err != nil {
 			panic(err)
 		}
@@ -562,7 +564,7 @@ func handleCmd(cmd string, args []string) {
 			log.Errorf("Failed to connect: %v", err)
 		}
 	case "logout":
-		err := client.Logout()
+		err := client.Logout(ctx)
 		if err != nil {
 			log.Errorf("Error logging out: %v", err)
 		} else {
@@ -579,7 +581,7 @@ func handleCmd(cmd string, args []string) {
 		}
 		resync := len(args) > 1 && args[1] == "resync"
 		for _, name := range names {
-			err := client.FetchAppState(name, resync, false)
+			err := client.FetchAppState(ctx, name, resync, false)
 			if err != nil {
 				log.Errorf("Failed to sync app state: %v", err)
 			}
@@ -642,6 +644,7 @@ func handleCmd(cmd string, args []string) {
 }
 
 func receiveHandler(rawEvt interface{}) {
+	ctx := context.Background()
 	switch event := rawEvt.(type) {
 	case *events.Message:
 		metaParts := []string{
@@ -676,7 +679,7 @@ func receiveHandler(rawEvt interface{}) {
 
 		// Handle different message types
 		if img := event.Message.GetImageMessage(); img != nil {
-			data, err := client.Download(img)
+			data, err := client.Download(ctx, img)
 			if err != nil {
 				log.Errorf("Failed to download image: %v", err)
 				return
@@ -696,7 +699,7 @@ func receiveHandler(rawEvt interface{}) {
 			msgType = "image"
 			text = filePath
 		} else if vid := event.Message.GetVideoMessage(); vid != nil {
-			data, err := client.Download(vid)
+			data, err := client.Download(ctx, vid)
 			if err != nil {
 				log.Errorf("Failed to download video: %v", err)
 				return
@@ -716,7 +719,7 @@ func receiveHandler(rawEvt interface{}) {
 			msgType = "video"
 			text = filePath
 		} else if aud := event.Message.GetAudioMessage(); aud != nil {
-			data, err := client.Download(aud)
+			data, err := client.Download(ctx, aud)
 			if err != nil {
 				log.Errorf("Failed to download audio: %v", err)
 				return
@@ -731,7 +734,7 @@ func receiveHandler(rawEvt interface{}) {
 			msgType = "audio"
 			text = filePath
 		} else if doc := event.Message.GetDocumentMessage(); doc != nil {
-			data, err := client.Download(doc)
+			data, err := client.Download(ctx, doc)
 			if err != nil {
 				log.Errorf("Failed to download document: %v", err)
 				return

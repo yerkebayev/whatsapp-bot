@@ -1,11 +1,8 @@
 ### Send message
-POST http://localhost:8080/send
+POST http://142.93.142.126:8088/send
 Content-Type: application/json
 
-{
-  "JID": "77785080094",
-  "Text": "Hello"
-}
+{"JID": "77086848720", "Text": "❗️ Ваш код подтверждения *306777*"}
 
 ### Check contact
 POST http://localhost:8080/check-user
