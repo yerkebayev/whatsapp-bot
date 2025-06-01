@@ -1230,6 +1230,7 @@ func checkUserHandler(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, fmt.Sprintf("Failed to check phone number: %v", err), http.StatusInternalServerError)
 		return
 	}
+	println(resp)
 
 	if len(resp) > 0 && resp[0].IsIn {
 		json.NewEncoder(w).Encode(map[string]bool{"exists": true})
