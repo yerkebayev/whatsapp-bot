@@ -1,5 +1,5 @@
 # Use an official Golang image to build the application
-FROM golang:1.21 AS builder
+FROM golang:1.23 AS builder
 
 # Set the working directory inside the builder container
 WORKDIR /awesomeProject3
