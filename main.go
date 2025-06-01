@@ -1236,9 +1236,12 @@ func checkUserHandler(w http.ResponseWriter, r *http.Request) {
 	println(resp)
 
 	if len(resp) > 0 && resp[0].IsIn {
+		jid := resp[0].JID.String()
+		phone := strings.Split(jid, "@")[0]
+
 		json.NewEncoder(w).Encode(map[string]interface{}{
 			"exists":       resp[0].IsIn,
-			"phone_number": resp[0].JID,
+			"phone_number": phone,
 		})
 	} else {
 		json.NewEncoder(w).Encode(map[string]bool{"exists": false})
