@@ -1236,7 +1236,10 @@ func checkUserHandler(w http.ResponseWriter, r *http.Request) {
 	println(resp)
 
 	if len(resp) > 0 && resp[0].IsIn {
-		json.NewEncoder(w).Encode(map[string]bool{"exists": true})
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"exists":       resp[0].IsIn,
+			"phone_number": resp[0].JID,
+		})
 	} else {
 		json.NewEncoder(w).Encode(map[string]bool{"exists": false})
 	}
