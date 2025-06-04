@@ -283,6 +283,7 @@ func main() {
 	router.HandleFunc("/check-user", checkUserHandler)            // Новый маршрут для проверки номера телефона
 	router.HandleFunc("/get-media", mediaHandler)                 // Новый маршрут для получение файлов
 	router.HandleFunc("/delete-media", mediaDeleteHandler)        // Удаление файла файлов
+	router.HandleFunc("/health", healthCheckHandler)              // Проверка сервиса
 
 	go http.ListenAndServe(":8080", router)
 
@@ -1248,4 +1249,12 @@ func checkUserHandler(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(map[string]bool{"exists": false})
 	}
+}
+
+func healthCheckHandler(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]string{
+		"status":  "ok",
+		"message": "WhatsApp service is running",
+	})
 }
