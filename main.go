@@ -1252,7 +1252,7 @@ func checkUserHandler(w http.ResponseWriter, r *http.Request) {
 }
 
 func healthCheckHandler(w http.ResponseWriter, r *http.Request) {
-	if !client.IsConnected() {
+	if !client.IsLoggedIn() {
 		http.Error(w, "WhatsApp client is not connected", http.StatusInternalServerError)
 		return
 	}
