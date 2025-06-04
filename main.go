@@ -1252,9 +1252,15 @@ func checkUserHandler(w http.ResponseWriter, r *http.Request) {
 }
 
 func healthCheckHandler(w http.ResponseWriter, r *http.Request) {
+	if !client.IsConnected() {
+		http.Error(w, "WhatsApp client is not connected", http.StatusInternalServerError)
+		return
+	}
+
 	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
 	json.NewEncoder(w).Encode(map[string]string{
 		"status":  "ok",
-		"message": "WhatsApp service is running",
+		"message": "WhatsApp client is connected",
 	})
 }
