@@ -618,7 +618,7 @@ func receiveHandler(rawEvt interface{}) {
 				log.Warnf("Failed to determine file extension for mimetype: %s, using fallback .jpg", img.GetMimetype())
 				exts = append(exts, ".jpg")
 			}
-			filePath = fmt.Sprintf("media/image/%s%s", event.Info.ID, exts[0])
+			filePath = fmt.Sprintf("/var/www/whatsapp-bot/media/image/%s%s", event.Info.ID, exts[0])
 			err = saveMediaFile(filePath, data)
 			if err != nil {
 				log.Errorf("Failed to save image: %v", err)
@@ -638,7 +638,7 @@ func receiveHandler(rawEvt interface{}) {
 				log.Warnf("Failed to determine file extension for mimetype: %s, using fallback .mp4", vid.GetMimetype())
 				exts = append(exts, ".mp4")
 			}
-			filePath = fmt.Sprintf("media/video/%s%s", event.Info.ID, exts[0])
+			filePath = fmt.Sprintf("/var/www/whatsapp-bot/media/video/%s%s", event.Info.ID, exts[0])
 			err = saveMediaFile(filePath, data)
 			if err != nil {
 				log.Errorf("Failed to save video: %v", err)
@@ -653,7 +653,7 @@ func receiveHandler(rawEvt interface{}) {
 				log.Errorf("Failed to download audio: %v", err)
 				return
 			}
-			filePath = fmt.Sprintf("media/audio/%s.ogg", event.Info.ID)
+			filePath = fmt.Sprintf("/var/www/whatsapp-bot/media/audio/%s.ogg", event.Info.ID)
 			err = saveMediaFile(filePath, data)
 			if err != nil {
 				log.Errorf("Failed to save audio: %v", err)
@@ -673,7 +673,7 @@ func receiveHandler(rawEvt interface{}) {
 				log.Warnf("Failed to determine file extension for mimetype: %s, using fallback .pdf", doc.GetMimetype())
 				exts = append(exts, ".pdf")
 			}
-			filePath = fmt.Sprintf("media/document/%s%s", event.Info.ID, exts[0])
+			filePath = fmt.Sprintf("/var/www/whatsapp-bot/media/document/%s%s", event.Info.ID, exts[0])
 			err = saveMediaFile(filePath, data)
 			if err != nil {
 				log.Errorf("Failed to save document: %v", err)
