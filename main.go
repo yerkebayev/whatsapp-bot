@@ -78,7 +78,7 @@ type ClientState struct {
 	LastActivity time.Time // track last message time
 }
 
-const conversationTimeout = 1 * time.Minute
+const conversationTimeout = 10 * time.Minute
 
 
 func main() {
@@ -211,7 +211,7 @@ func main() {
 	defer cancel()
 
 	// Run checker every 1 minute
-	go clientStateChecker(ctx, 15*time.Second, client)
+	go clientStateChecker(ctx, 1*time.Second, client)
 
 	if os.Getenv("DOCKER_MODE") == "true" || os.Getenv("SYSTEMD_MODE") == "true" {
 		select {} // Prevent the application from exiting in Docker mode
