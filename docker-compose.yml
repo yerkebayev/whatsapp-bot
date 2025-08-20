@@ -14,10 +14,7 @@ services:
       - DB_DIALECT=sqlite3
       - DEBUG=true
       - REQUEST_FULL_SYNC=false
-      - PROGRAM_ID=ADMIN
       - DEPO_URL=https://devapi.courstore.com/v1/dialog
-      - API_URL=https://devapi.courstore.com/v1
-      - TG_URL=https://devtg.courstore.com/
     networks:
       - app-network
 

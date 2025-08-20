@@ -2,31 +2,23 @@ package main
 
 import (
 	"bufio"
-	"bytes"
 	"context"
 	"database/sql"
-	"encoding/csv"
 	"encoding/hex"
 	"encoding/json"
 	"flag"
 	"fmt"
-	"io/ioutil"
 	"mime"
-	"mime/multipart"
 	"net/http"
 	"os"
 	"os/signal"
 	"strings"
-	"sync"
 	"sync/atomic"
 	"syscall"
 	"time"
 
 	_ "github.com/mattn/go-sqlite3"
 	"github.com/mdp/qrterminal/v3"
-	"google.golang.org/protobuf/proto"
-
-	"github.com/robfig/cron"
 	"go.mau.fi/whatsmeow"
 	"go.mau.fi/whatsmeow/appstate"
 	waBinary "go.mau.fi/whatsmeow/binary"
@@ -36,109 +28,62 @@ import (
 	"go.mau.fi/whatsmeow/types"
 	"go.mau.fi/whatsmeow/types/events"
 	waLog "go.mau.fi/whatsmeow/util/log"
+	"google.golang.org/protobuf/proto"
 )
 
 var (
 	client          *whatsmeow.Client
 	log             waLog.Logger
-	csvMutex        sync.Mutex
 	logLevel        = "INFO"
 	debugLogs       = flag.Bool("debug", false, "Enable debug logs?")
 	dbDialect       = flag.String("db-dialect", "sqlite3", "Database dialect (sqlite3 or postgres)")
-	dbAddress       = flag.String("db-address", "file:/data/mdtest.db?_foreign_keys=on", "Database address")
+	dbAddress       = flag.String("db-address", "./whatsapp.db?_foreign_keys=on", "Database address")
 	requestFullSync = flag.Bool("request-full-sync", false, "Request full (1 year) history sync when logging in?")
 	pairRejectChan  = make(chan bool, 1)
 	historySyncID   int32
-	startupTime     = time.Now().Unix()
-	programID       = flag.String("program-id", "", "Unique identifier for the program") // Initialize as an empty string
-	mainPhone       = ""
-	depositoryUrl   = flag.String("depo-url", "https://devapi.courstore.com/v1/dialog", "Host for saving all messages")
-	apiUrl          = flag.String("api-url", "https://devapi.courstore.com/v1", "Host for API")
-	tgUrl           = flag.String("tg-url", "https://devtg.courstore.com/", "Host for reconnecting")
+	startupTime     = time.Now()
+	mainPhone       = "77009809778"
 )
 
-type HostInfo struct {
-	Role  string `json:"role"`
-	Phone string `json:"phone"`
-	Host  string `json:"host"`
-	Port  string `json:"port"`
-}
+var db *sql.DB
 
 type Message struct {
-	programID string
+	ID        int64
 	messageID string
+	language string
+	addressId string
 	phone     string
+	msgGoodOrBad string
 	msgType   string
 	text      string
+	fileId    string
+    answerForMessageId string
 	dateTime  string
 }
 
-type CDMessage struct {
-	ClientId    string `json:"client_id"`
-	SystemId    string `json:"system_id"`
-	Type        string `json:"type"`
-	Message     string `json:"message"`
-	FromClient  bool   `json:"from_client"`
-	MessageType string `json:"message_type"`
+type Address struct {
+	addressId string
+	title string
+	link string
 }
 
-var hostData = []HostInfo{
-	{Role: "admin", Phone: "77007727858", Host: "localhost", Port: "8081"},
-	{Role: "user", Phone: "77009809778", Host: "localhost", Port: "8082"},
-	// Добавьте здесь другие записи по необходимости
+type ClientState struct {
+	Phone        string
+	CurrentStep  string // "choose_language", "choose_address", "choose_type", "completed"
+	Language     string
+	AddressID    string
+	MsgGoodOrBad string
+	LastMessage  string
+	LastActivity time.Time // track last message time
 }
 
-func getHostInfoHandler(w http.ResponseWriter, r *http.Request) {
-	role := r.URL.Query().Get("role")
-	phone := r.URL.Query().Get("phone")
+const conversationTimeout = 2 * time.Minute
 
-	if role == "" || phone == "" {
-		http.Error(w, "Role and phone parameters are required", http.StatusBadRequest)
-		return
-	}
-
-	for _, hostInfo := range hostData {
-		if hostInfo.Role == role && hostInfo.Phone == phone {
-			response, err := json.Marshal(hostInfo)
-			if err != nil {
-				http.Error(w, "Failed to generate JSON", http.StatusInternalServerError)
-				return
-			}
-			w.Header().Set("Content-Type", "application/json")
-			w.Write(response)
-			return
-		}
-	}
-
-	http.Error(w, "Host info not found", http.StatusNotFound)
-}
 
 func main() {
 	waBinary.IndentXML = true
 
-	// Check if PROGRAM_ID environment variable is set and use it as the default value for program-id flag
-	if envProgramID := os.Getenv("PROGRAM_ID"); envProgramID != "" {
-		flag.Set("program-id", envProgramID)
-	}
-
-	if envDepositoryUrl := os.Getenv("DEPO_URL"); envDepositoryUrl != "" {
-		flag.Set("depo-url", envDepositoryUrl)
-	}
-
-	if apiUrl := os.Getenv("API_URL"); apiUrl != "" {
-		flag.Set("api-url", apiUrl)
-	}
-
-	if envTgUrl := os.Getenv("TG_URL"); envTgUrl != "" {
-		flag.Set("tg-url", envTgUrl)
-	}
-
 	flag.Parse()
-
-	if *programID == "" {
-		fmt.Println("Program ID is required")
-		return
-	}
 
 	if *debugLogs {
 		logLevel = "DEBUG"
@@ -177,10 +122,6 @@ func main() {
 		log.Errorf("WhatsApp client is not initialized")
 		return
 	}
-
-	c := cron.New()
-	c.AddFunc("0 * * * *", func() { sendRecordToCentralDepository(10) })
-	c.Start()
 
 	var isWaitingForPair atomic.Bool
 	client.PrePairCallback = func(jid types.JID, platform, businessName string) bool {
@@ -234,26 +175,6 @@ func main() {
 
 					log.Infof("QR code saved as text and image")
 
-					// Send QR code to 'localhost:8080/new-qr'
-					qrPayload := map[string]string{"code": evt.Code}
-					payloadBytes, err := json.Marshal(qrPayload)
-					if err != nil {
-						log.Errorf("Failed to marshal QR code JSON: %v", err)
-						return
-					}
-
-					resp, err := http.Post(*tgUrl+"whatsmeow/new-qr", "application/json", bytes.NewReader(payloadBytes))
-					if err != nil {
-						log.Errorf("Failed to send QR code to /new-qr: %v", err)
-						return
-					}
-					defer resp.Body.Close()
-
-					if resp.StatusCode != http.StatusOK {
-						log.Errorf("Failed to send QR code to /new-qr, status code: %d", resp.StatusCode)
-						return
-					}
-
 					log.Infof("QR code sent to /new-qr successfully")
 				} else {
 					log.Infof("QR channel result: %s", evt.Event)
@@ -276,16 +197,18 @@ func main() {
 	// Start HTTP server
 	router := http.NewServeMux()
 	router.HandleFunc("/send", sendMessageHandler)
-	router.HandleFunc("/qr-text", qrTextHandler)
-	router.HandleFunc("/qr-photo", qrPhotoHandler)
-	router.HandleFunc("/get-host-info", getHostInfoHandler)       // Новый маршрут
 	router.HandleFunc("/get-all-messages", getAllMessagesHandler) // Новый маршрут для получения всех сообщений
 	router.HandleFunc("/check-user", checkUserHandler)            // Новый маршрут для проверки номера телефона
 	router.HandleFunc("/get-media", mediaHandler)                 // Новый маршрут для получение файлов
 	router.HandleFunc("/delete-media", mediaDeleteHandler)        // Удаление файла файлов
-	router.HandleFunc("/health", healthCheckHandler)              // Проверка сервиса
 
 	go http.ListenAndServe(":8080", router)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	// Run checker every 1 minute
+	go clientStateChecker(ctx, 15*time.Second, client)
 
 	if os.Getenv("DOCKER_MODE") == "true" {
 		select {} // Prevent the application from exiting in Docker mode
@@ -332,83 +255,171 @@ func main() {
 	}
 }
 
-func writeMessageToDB(programID, messageID, phone, msgType, text, dateTime string) error {
-	db, err := sql.Open(*dbDialect, *dbAddress)
-	if err != nil {
-		return fmt.Errorf("failed to connect to database: %v", err)
-	}
-	defer db.Close()
+func getAddresses() ([]Address, error) {
+    // Run query
+    rows, err := db.Query("SELECT address_id, title, link FROM addresses")
+    if err != nil {
+        return nil, err
+    }
+    defer rows.Close()
 
-	query := `INSERT INTO messages (program_id, message_id, phone, message_type, text, date_time) VALUES (?, ?, ?, ?, ?, ?)`
-	_, err = db.Exec(query, programID, messageID, phone, msgType, text, dateTime)
-	if err != nil {
-		log.Errorf("Failed to insert message into database: %v", err)
-		return fmt.Errorf("failed to insert message into database: %v", err)
+    var addresses []Address
+    for rows.Next() {
+		var addr Address
+		err := rows.Scan(&addr.addressId, &addr.title, &addr.link)
+		if err != nil {
+			return nil, err
+		}
+	
+		addr.title = extractStreetAndNumber(addr.title)
+		fmt.Println("Street & number:", addr.title)
+	
+		addresses = append(addresses, addr)
 	}
-	log.Infof("Message inserted into database: %s", messageID)
-	return nil
+	
+
+    // Check iteration errors
+    if err := rows.Err(); err != nil {
+        return nil, err
+    }
+
+    return addresses, nil
 }
 
-func deleteMessageFromDB(messageId string) (bool, error) {
-	db, err := sql.Open(*dbDialect, *dbAddress)
-	if err != nil {
-		return false, fmt.Errorf("failed to connect to database: %v", err)
+func extractStreetAndNumber(full string) string {
+    parts := strings.Split(full, " ")
+    if len(parts) < 2 {
+        return full
+    }
+    // Return last two tokens, e.g. "Алашахана 34"
+    return parts[len(parts)-2] + " " + parts[len(parts)-1]
+}
+
+
+func writeMessageToDB(messageID, jids, msgType, text, dateTime string, state *ClientState) error {
+    // Skip if text is empty or whitespace
+    if strings.TrimSpace(text) == "" {
+        log.Infof("Skipping empty message: %s", messageID)
+        return nil
+    }
+
+    // Split JIDs string by spaces
+    arr := strings.Split(jids, " ")
+    if len(arr) < 1 {
+        return fmt.Errorf("invalid JIDs string: %s", jids)
+    }
+
+    // Parse sender
+    sender, ok := parseJID(arr[0])
+    if !ok {
+        return fmt.Errorf("failed to parse sender JID: %s", arr[0])
+    }
+    fromPhone := sender.User
+
+    // Parse receiver
+    receiverJIDStr := mainPhone
+    if len(arr) >= 3 {
+        receiverJIDStr = arr[2]
+    }
+
+    receiver, ok := parseJID(receiverJIDStr)
+    if !ok {
+        return fmt.Errorf("failed to parse receiver JID: %s", receiverJIDStr)
+    }
+    toPhone := receiver.User
+
+    fmt.Printf("Sender: %s, Receiver: %s\n", fromPhone, toPhone)
+
+    // Only save if either sender or receiver is mainPhone
+    if fromPhone != mainPhone && toPhone != mainPhone {
+        log.Infof("Skipping message not involving main phone: %s", messageID)
+        return nil
+    }
+
+    addressID := "0" // default
+    if state != nil && state.AddressID != "" {
+        addressID = state.AddressID
+    }
+
+    language := ""
+    if state != nil && state.Language != "" {
+        language = state.Language
+    }
+
+	msgGoodOrBad := ""
+	if state != nil && state.MsgGoodOrBad != "" {
+        msgGoodOrBad = state.MsgGoodOrBad
+    }
+
+
+    query := `INSERT INTO messages (
+        message_id, language, address_id, from_phone, to_phone, msgGoodOrBad, message_type, text, date_time
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
+
+    _, err := db.Exec(query,
+        messageID,
+        language,
+        addressID,
+        fromPhone,
+        toPhone,
+        msgGoodOrBad,
+        msgType,
+        text,
+        dateTime,
+    )
+    if err != nil {
+        log.Errorf("Failed to insert message into database: %v", err)
+        return fmt.Errorf("failed to insert message into database: %v", err)
+    }
+
+    log.Infof("Message inserted into database: %s", messageID)
+    return nil
+}
+
+
+
+func GetClientState(phone string) (*ClientState, error) {
+	row := db.QueryRow(`SELECT phone, current_step, language, address_id, last_message, last_activity FROM client_states WHERE phone = ?`, phone)
+	var state ClientState
+	var lastActivityStr string
+	err := row.Scan(&state.Phone, &state.CurrentStep, &state.Language, &state.AddressID, &state.LastMessage, &lastActivityStr)
+	if err == sql.ErrNoRows {
+		return nil, nil
+	} else if err != nil {
+		return nil, err
 	}
-	defer db.Close()
+	state.LastActivity, _ = time.Parse(time.RFC3339, lastActivityStr)
+	return &state, nil
+}
+
+func SaveClientState(state *ClientState) error {
+	state.LastActivity = time.Now()
+	_, err := db.Exec(`
+	INSERT INTO client_states (phone, current_step, language, address_id, last_message, last_activity)
+	VALUES (?, ?, ?, ?, ?, ?)
+	ON CONFLICT(phone) DO UPDATE SET
+	current_step=excluded.current_step,
+	language=excluded.language,
+	address_id=excluded.address_id,
+	last_message=excluded.last_message,
+	last_activity=excluded.last_activity
+	`,
+		state.Phone, state.CurrentStep, state.Language, state.AddressID, state.LastMessage, state.LastActivity.Format(time.RFC3339))
+	return err
+}
+
+
+func deleteMessageFromDB(messageId string) (bool, error) {
 	query := "DELETE FROM messages WHERE message_id=$1"
-	_, err = db.Exec(query, messageId)
+	_, err := db.Exec(query, messageId)
 	if err != nil {
 		log.Errorf("Failed to delete message from database: %v", err)
 		return false, fmt.Errorf("failed to delete message from database: %v", err)
 	}
 	return true, nil
 }
-func fetchAndUploadProfilePhoto(client *whatsmeow.Client, jid types.JID) {
-	info, err := client.GetProfilePictureInfo(jid, &whatsmeow.GetProfilePictureParams{})
-	if err != nil {
-		fmt.Printf("Error getting profile photo info for %s: %v\n", jid.String(), err)
-		return
-	}
-	if info == nil {
-		// Possibly no profile photo or no permission
-		fmt.Printf("No profile photo found for %s\n", jid.String())
-		return
-	}
-
-	// upload
-	var buf bytes.Buffer
-	writer := multipart.NewWriter(&buf)
-
-	writer.WriteField("phone", jid.User)
-	writer.WriteField("profile_url", info.URL)
-	writer.Close()
-
-	// Create request
-	url := *apiUrl + "/files/upload_whatsapp_profile"
-	req, err := http.NewRequest("POST", url, &buf)
-	if err != nil {
-		panic(err)
-	}
-	req.Header.Set("Content-Type", writer.FormDataContentType())
-
-	// Send request
-	httpClient := &http.Client{}
-	resp, err := httpClient.Do(req)
-	if err != nil {
-		panic(err)
-	}
-	defer resp.Body.Close()
-
-	fmt.Printf("Response status: %s\n", resp.Status)
-	println(info.URL)
-}
 
 func sendRecordToCentralDepository(recordCount int) error {
-	db, err := sql.Open(*dbDialect, *dbAddress)
-	if err != nil {
-		return fmt.Errorf("failed to connect to database: %v", err)
-	}
-	defer db.Close()
 	if mainPhone == "" {
 		row, err := db.Query("SELECT jid FROM whatsmeow_device limit 1")
 		if err != nil {
@@ -424,7 +435,7 @@ func sendRecordToCentralDepository(recordCount int) error {
 		}
 	}
 	log.Infof("Jid = %s", mainPhone)
-	rows, err := db.Query("SELECT program_id, message_id, phone, message_type, text, date_time FROM messages limit ?", recordCount)
+	rows, err := db.Query("SELECT message_id, phone, message_type, text, date_time FROM messages limit ?", recordCount)
 	if err != nil {
 		return fmt.Errorf("Failed to query messages: %v", err)
 	}
@@ -432,13 +443,12 @@ func sendRecordToCentralDepository(recordCount int) error {
 
 	var messages []Message
 	for rows.Next() {
-		var programID, messageID, phone, msgType, text, dateTime string
-		if err := rows.Scan(&programID, &messageID, &phone, &msgType, &text, &dateTime); err != nil {
+		var messageID, phone, msgType, text, dateTime string
+		if err := rows.Scan(&messageID, &phone, &msgType, &text, &dateTime); err != nil {
 			return fmt.Errorf("Failed to scan message: %v", err)
 		}
 		messages = append(messages, Message{
 			messageID: messageID,
-			programID: programID,
 			phone:     phone,
 			msgType:   msgType,
 			text:      text,
@@ -462,48 +472,47 @@ func sendRecordToCentralDepository(recordCount int) error {
 			if strings.Contains(clientId, ":") {
 				clientId = SubstringBefore(message.phone, ":")
 			}
-			data := &CDMessage{
-				ClientId:    clientId,
-				SystemId:    *programID,
-				Type:        message.msgType,
-				Message:     message.text,
-				FromClient:  !fromMe,
-				MessageType: "test",
-			}
-			jsonData, err := json.Marshal(data)
-			if err != nil {
-				log.Errorf("Failed to generate JSON: %v", err)
-			} else {
-				log.Infof("JSON: %s", string(jsonData))
+			// data := &CDMessage{
+			// 	ClientId:    clientId,
+			// 	Type:        message.msgType,
+			// 	Message:     message.text,
+			// 	FromClient:  !fromMe,
+			// 	MessageType: "test",
+			// }
+			// jsonData, err := json.Marshal(data)
+			// if err != nil {
+			// 	log.Errorf("Failed to generate JSON: %v", err)
+			// } else {
+			// 	log.Infof("JSON: %s", string(jsonData))
 
-				r, err := http.NewRequest("POST", *depositoryUrl, bytes.NewBuffer(jsonData))
-				if err != nil {
-					log.Errorf("Failed to create request: %v", err)
-				}
+				// r, err := http.NewRequest("POST", *depositoryUrl, bytes.NewBuffer(jsonData))
+				// if err != nil {
+					// log.Errorf("Failed to create request: %v", err)
+				// }
 
-				r.Header.Add("Content-Type", "application/json")
+				// r.Header.Add("Content-Type", "application/json")
 
-				client := &http.Client{}
-				res, err := client.Do(r)
-				if err != nil {
-					log.Errorf("Failed to create request: %v", err)
-				}
+				// client := &http.Client{}
+				// res, err := client.Do(r)
+				// if err != nil {
+				// 	log.Errorf("Failed to create request: %v", err)
+				// }
 
-				defer res.Body.Close()
+				// defer res.Body.Close()
 
-				post := res.Body
+				// post := res.Body
 
-				if res.StatusCode != http.StatusCreated {
-					log.Errorf("Failed to create request: %v", err)
-				} else {
-					log.Infof("Create record with ID: %s", post)
-					_, err := deleteMessageFromDB(message.messageID)
-					if err != nil {
-						log.Errorf("Failed to delete message from database: %v", err)
-					}
-				}
+				// if res.StatusCode != http.StatusCreated {
+				// 	log.Errorf("Failed to create request: %v", err)
+				// } else {
+				// 	log.Infof("Create record with ID: %s", post)
+				// 	_, err := deleteMessageFromDB(message.messageID)
+				// 	if err != nil {
+				// 		log.Errorf("Failed to delete message from database: %v", err)
+				// 	}
+				// }
 
-			}
+			// }
 		}
 	}
 	messages = nil
@@ -528,23 +537,37 @@ func SubstringAfter(str string, sep string) string {
 }
 
 func parseJID(arg string) (types.JID, bool) {
-	if arg[0] == '+' {
+	arg = strings.TrimSpace(arg)
+	if arg == "" {
+		log.Errorf("Empty JID string")
+		return types.JID{}, false
+	}
+
+	// Remove leading '+'
+	if strings.HasPrefix(arg, "+") {
 		arg = arg[1:]
 	}
+
+	// No @ means it's just a user — attach default server
 	if !strings.ContainsRune(arg, '@') {
 		return types.NewJID(arg, types.DefaultUserServer), true
-	} else {
-		recipient, err := types.ParseJID(arg)
-		if err != nil {
-			log.Errorf("Invalid JID %s: %v", arg, err)
-			return recipient, false
-		} else if recipient.User == "" {
-			log.Errorf("Invalid JID %s: no server specified", arg)
-			return recipient, false
-		}
-		return recipient, true
 	}
+
+	// Parse full JID
+	recipient, err := types.ParseJID(arg)
+	if err != nil {
+		log.Errorf("Invalid JID %s: %v", arg, err)
+		return types.JID{}, false
+	}
+
+	if recipient.User == "" {
+		log.Errorf("Invalid JID %s: no user part", arg)
+		return types.JID{}, false
+	}
+
+	return recipient, true
 }
+
 func handleCmd(cmd string, args []string) {
 	ctx := context.Background()
 	switch cmd {
@@ -644,10 +667,17 @@ func handleCmd(cmd string, args []string) {
 	}
 }
 
+
 func receiveHandler(rawEvt interface{}) {
 	ctx := context.Background()
 	switch event := rawEvt.(type) {
 	case *events.Message:
+
+		if event.Info.Timestamp.Before(startupTime) {
+			fmt.Println("skip", event.Message)
+			return
+		}
+
 		metaParts := []string{
 			fmt.Sprintf("pushname: %s", event.Info.PushName),
 			fmt.Sprintf("timestamp: %s", event.Info.Timestamp.String()),
@@ -767,46 +797,145 @@ func receiveHandler(rawEvt interface{}) {
 			}
 			msgType = event.Info.Type
 		}
+		sender := event.Info.Sender
+		if sender.User != mainPhone {
+			state, err := GetClientState(sender.User)
+			if err != nil {
+				log.Errorf("Failed to get client state: %v", err)
+				return
+	     	}
 
-		// Fetch profile photo
-		senderJID := event.Info.Sender
-		fetchAndUploadProfilePhoto(client, senderJID)
+			startBoolean := false
 
-		// Save message to CSV
-		err := writeMessageToCSV(*programID, event.Info.ID, event.Info.SourceString(), msgType, text, event.Info.Timestamp.String())
-		if err != nil {
-			log.Errorf("Failed to write message to CSV: %v", err)
-		}
+			 if state == nil {
+				state = &ClientState{
+					Phone:       sender.User,
+					CurrentStep: "choose_language",
+				}
+				SendMessageTo(client, sender, getMessage("ru", "choose_language"))
+				startBoolean = true
+			} else {
+				// Check timeout
+				if time.Since(state.LastActivity) > conversationTimeout {
+					state.CurrentStep = "choose_language"
+					state.Language = ""
+					state.AddressID = ""
+					state.MsgGoodOrBad = ""
+				    SendMessageTo(client, sender, getMessage("ru", "choose_language"))
+					startBoolean = true
+				}
+			}
+			state.LastMessage = text
 
-		// Save message to Database
-		err = writeMessageToDB(*programID, event.Info.ID, event.Info.SourceString(), msgType, text, event.Info.Timestamp.String())
-		if err != nil {
-			log.Errorf("Failed to write message to database: %v", err)
+			if startBoolean == false {
+				switch state.CurrentStep {
+				case "choose_language":
+					lang := parseLanguageChoice(text)
+					if lang == "" {
+						SendMessageTo(client, sender, getMessage("ru", "invalid_language"))
+						return
+					}
+					state.Language = lang
+					state.CurrentStep = "choose_address"
+
+					addresses, err1 := getAddresses()
+					if err1 != nil {
+						log.Errorf("Failed to get addresses: %v", err)
+						return
+					 }
+					
+					// 🔹 Build numbered list
+					var msgBuilder strings.Builder
+					msgBuilder.WriteString(getMessage(state.Language, "choose_address") + "\n")
+					for i, addr := range addresses {
+						msgBuilder.WriteString(fmt.Sprintf("%d. %s\n", i+1, addr))
+					}
+					SendMessageTo(client, sender, msgBuilder.String())
+				case "choose_address":
+					addrID := text
+					if addrID == "" {
+						addresses, err1 := getAddresses()
+						if err1 != nil {
+							log.Errorf("Failed to get addresses: %v", err)
+							return
+						 }
+						
+						// 🔹 Build numbered list
+						var msgBuilder strings.Builder
+						msgBuilder.WriteString(getMessage(state.Language, "invalid_address") + "\n")
+						for i, addr := range addresses {
+							msgBuilder.WriteString(fmt.Sprintf("%d. %s\n", i+1, addr))
+						}
+						SendMessageTo(client, sender, msgBuilder.String())
+						return
+					}
+					state.AddressID = addrID
+					state.CurrentStep = "choose_type"
+					SendMessageTo(client, sender, "Хабарлама түрін таңдаңы:\n1. Good\n2. Hate")
+				case "choose_type":
+					msgGoodOrBad := text
+					if msgGoodOrBad == "" {
+						SendMessageTo(client, sender, "Please select a valid message number:\n1. Shop A\n2. Shop B")
+						return
+					}
+					state.MsgGoodOrBad = msgGoodOrBad
+					state.CurrentStep = "process"
+					SendMessageTo(client, sender, "Write your feedback down! 😊")
+
+					if err := SaveClientState(state); err != nil {
+						log.Errorf("Failed to save client state: %v", err)
+					}
+				case "process":
+					println("in process")
+					// let's start storing while timeout
+				}
+			}
+
+			fmt.Printf(
+				"Curr state: Phone=%s, CurrentStep=%s, Language=%s, AddressID=%s, MsgGoodOrBad=%s, LastMessage=%s, LastActivity=%s\n",
+				state.Phone,
+				state.CurrentStep,
+				state.Language,
+				state.AddressID,
+				state.MsgGoodOrBad,
+				state.LastMessage,
+				state.LastActivity.Format(time.RFC3339),
+			)
+			
+
+			if state.CurrentStep != "process" {
+				if err := SaveClientState(state); err != nil {
+					log.Errorf("Failed to save client state: %v", err)
+				}
+			}
+
+			// Save message to Database
+			err = writeMessageToDB(event.Info.ID, event.Info.SourceString(), msgType, text, event.Info.Timestamp.String(), state)
+
+			if err != nil {
+				log.Errorf("Failed to write message to database: %v", err)
+			}
 		}
 	}
 }
 
-func qrTextHandler(w http.ResponseWriter, r *http.Request) {
-	qrContent, err := ioutil.ReadFile("qr_code.txt")
+func SendMessageTo(client *whatsmeow.Client, receiver types.JID, text string) {
+	msg := &waProto.Message{
+		Conversation: proto.String(text),
+	}
+	_, err := client.SendMessage(context.Background(), receiver, msg)
 	if err != nil {
-		http.Error(w, "Failed to read QR code file", http.StatusInternalServerError)
-		return
+		log.Errorf("Failed to send message to %s: %v", receiver, err)
 	}
-	qrData := map[string]string{
-		"qr_code": string(qrContent),
-	}
-	jsonData, err := json.Marshal(qrData)
-	if err != nil {
-		http.Error(w, "Failed to generate JSON", http.StatusInternalServerError)
-		return
-	}
-	w.Header().Set("Content-Type", "application/json")
-	w.Write(jsonData)
 }
 
-func qrPhotoHandler(w http.ResponseWriter, r *http.Request) {
-	w.Header().Set("Content-Type", "image/png")
-	http.ServeFile(w, r, "qr_code.png")
+func containsAddress(text string, addresses []Address) *Address {
+	for _, addr := range addresses {
+		if strings.Contains(strings.ToLower(text), strings.ToLower(addr.title)) || strings.Contains(strings.ToLower(addr.title), strings.ToLower(text)) {
+			return &addr
+		}
+	}
+	return nil
 }
 
 func mediaDeleteHandler(w http.ResponseWriter, r *http.Request) {
@@ -1125,36 +1254,11 @@ func sendMessageHandler(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-func writeMessageToCSV(programID, id, phone, msgType, text, dateTime string) error {
-	csvMutex.Lock()
-	defer csvMutex.Unlock()
-
-	file, err := os.OpenFile("/data/messages.csv", os.O_APPEND|os.O_WRONLY|os.O_CREATE, 0600)
-	if err != nil {
-		return err
-	}
-	defer file.Close()
-
-	writer := csv.NewWriter(file)
-	defer writer.Flush()
-
-	record := []string{programID, id, phone, msgType, text, dateTime}
-	return writer.Write(record)
-}
-
 func saveMediaFile(filePath string, data []byte) error {
 	return os.WriteFile(filePath, data, 0600)
 }
 func getAllMessagesHandler(w http.ResponseWriter, r *http.Request) {
-	db, err := sql.Open(*dbDialect, *dbAddress)
-	if err != nil {
-		http.Error(w, "Failed to connect to database", http.StatusInternalServerError)
-		log.Errorf("Failed to connect to database: %v", err)
-		return
-	}
-	defer db.Close()
-
-	rows, err := db.Query("SELECT program_id, message_id, phone, message_type, text, date_time FROM messages")
+	rows, err := db.Query("SELECT message_id, phone, message_type, text, date_time FROM messages")
 	if err != nil {
 		http.Error(w, "Failed to query messages", http.StatusInternalServerError)
 		log.Errorf("Failed to query messages: %v", err)
@@ -1164,14 +1268,13 @@ func getAllMessagesHandler(w http.ResponseWriter, r *http.Request) {
 
 	var messages []map[string]string
 	for rows.Next() {
-		var programID, messageID, phone, msgType, text, dateTime string
-		if err := rows.Scan(&programID, &messageID, &phone, &msgType, &text, &dateTime); err != nil {
+		var messageID, phone, msgType, text, dateTime string
+		if err := rows.Scan(&messageID, &phone, &msgType, &text, &dateTime); err != nil {
 			http.Error(w, "Failed to scan message", http.StatusInternalServerError)
 			log.Errorf("Failed to scan message: %v", err)
 			return
 		}
 		messages = append(messages, map[string]string{
-			"program_id":   programID,
 			"message_id":   messageID,
 			"phone":        phone,
 			"message_type": msgType,
@@ -1196,26 +1299,68 @@ func getAllMessagesHandler(w http.ResponseWriter, r *http.Request) {
 	w.Write(jsonData)
 }
 func initDB() error {
-	db, err := sql.Open(*dbDialect, *dbAddress)
+	var err error
+	db, err = sql.Open(*dbDialect, *dbAddress)
 	if err != nil {
 		return fmt.Errorf("failed to connect to database: %v", err)
 	}
-	defer db.Close()
 
-	query := `CREATE TABLE IF NOT EXISTS messages (
-        program_id TEXT,
-        message_id TEXT,
-        phone TEXT,
-        message_type TEXT,
-        text TEXT,
-        date_time TEXT
-    );`
-	_, err = db.Exec(query)
-	if err != nil {
+	db.Exec("PRAGMA journal_mode=WAL;")
+	db.Exec("PRAGMA busy_timeout = 5000;")
+
+
+	// Create Messages table
+	messageTable := `
+	CREATE TABLE IF NOT EXISTS messages (
+		id INTEGER PRIMARY KEY AUTOINCREMENT,
+		message_id TEXT,
+		language TEXT,
+		address_id TEXT,
+		from_phone TEXT,
+		to_phone TEXT,
+		msgGoodOrBad TEXT,
+		message_type TEXT,
+		text TEXT,
+		file_id TEXT,
+		answer_for_message_id TEXT,
+		date_time TEXT
+	);`
+
+	// Create Addresses table
+	addressTable := `
+	CREATE TABLE IF NOT EXISTS addresses (
+		address_id TEXT PRIMARY KEY,
+		title TEXT,
+		link TEXT
+	);`
+
+	// Create ClientStates table
+	stateTable := `
+	CREATE TABLE IF NOT EXISTS client_states (
+		phone TEXT PRIMARY KEY,
+		current_step TEXT,
+		language TEXT,
+		address_id TEXT,
+		msgGoodOrBad TEXT,
+		last_message TEXT,
+		last_activity DATETIME
+	);`
+
+	// Execute table creation
+	if _, _ = db.Exec(messageTable); err != nil {
 		return fmt.Errorf("failed to create messages table: %v", err)
 	}
+	if _, _ = db.Exec(addressTable); err != nil {
+		return fmt.Errorf("failed to create addresses table: %v", err)
+	}
+	if _, _ = db.Exec(stateTable); err != nil {
+		return fmt.Errorf("failed to create client_states table: %v", err)
+	}
+
+	fmt.Println("Database initialized successfully.")
 	return nil
 }
+
 func checkUserHandler(w http.ResponseWriter, r *http.Request) {
 	var req struct {
 		PhoneNumber string `json:"phone_number"`
@@ -1251,16 +1396,119 @@ func checkUserHandler(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-func healthCheckHandler(w http.ResponseWriter, r *http.Request) {
-	if !client.IsLoggedIn() {
-		http.Error(w, "WhatsApp client is not connected", http.StatusInternalServerError)
-		return
+func parseLanguageChoice(msg string) string {
+	switch strings.TrimSpace(msg) {
+	case "1":
+		return "kk"
+	case "2":
+		return "ru"
+	default:
+		return ""
 	}
+}
 
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(http.StatusOK)
-	json.NewEncoder(w).Encode(map[string]string{
-		"status":  "ok",
-		"message": "WhatsApp client is connected",
-	})
+
+func clientStateChecker(ctx context.Context, interval time.Duration, client *whatsmeow.Client) {
+    ticker := time.NewTicker(interval)
+    defer ticker.Stop()
+
+    for {
+        select {
+        case <-ctx.Done():
+            return
+        case <-ticker.C:
+			fmt.Println("Start to check")
+
+            rows, err := db.Query(`SELECT phone, current_step, language, address_id, msgGoodOrBad, last_message, last_activity FROM client_states`)
+            if err != nil {
+                log.Errorf("Failed to query client states: %v", err)
+                continue
+            }
+
+			defer rows.Close()
+            for rows.Next() {
+				var state ClientState
+				var lastActivityStr string
+				var msgGoodOrBad sql.NullString // nullable column
+				if err := rows.Scan(
+					&state.Phone,
+					&state.CurrentStep,
+					&state.Language,
+					&state.AddressID,
+					&msgGoodOrBad,
+					&state.LastMessage,
+					&lastActivityStr,
+				); err != nil {
+					log.Errorf("Failed to scan row: %v", err)
+					continue
+				}
+			
+				// Convert nullable string to normal string
+				if msgGoodOrBad.Valid {
+					state.MsgGoodOrBad = msgGoodOrBad.String
+				} else {
+					state.MsgGoodOrBad = ""
+				}
+			
+				state.LastActivity, _ = time.Parse(time.RFC3339, lastActivityStr)
+			
+				// Check if client is in process step and inactive for timeout
+				if state.CurrentStep == "process" && time.Since(state.LastActivity) > conversationTimeout {
+					receiver, ok := parseJID(state.Phone)
+					if !ok {
+						log.Errorf("Invalid phone/JID: %s", state.Phone)
+						continue
+					}
+					SendMessageTo(client, receiver, getMessage(state.Language, "end_feedback"))
+			
+					// Reset conversation
+					state.CurrentStep = "choose_language"
+					state.Language = ""
+					state.AddressID = ""
+					state.MsgGoodOrBad = ""
+					state.LastMessage = ""
+					state.LastActivity = time.Now()
+			
+					if err := SaveClientState(&state); err != nil {
+						log.Errorf("Failed to save client state: %v", err)
+					}
+				}
+			}
+        }
+    }
+}
+
+
+// 1. Define translations
+var messages = map[string]map[string]string{
+	"kz": {
+		"choose_language": "Сәлем! 🌐Қызмет көрсету тілін таңдаңыз\n🌐Выберите язык обслуживания\n\n1. Қазақ тілі\n2. Русский язык",
+		"invalid_language": "🌐Ұсынылған сандардың бірін таңдаңыз\n🌐Выберите одну из предложенных цифр\n\n1. Қазақ тілі\n2. Русский язык",
+		"choose_address": "Мекенжайды таңдаңыз:",
+		"invalid_address": "Өтінемін дұрыс мекенжай нөмірін таңдаңыз:",
+		"choose_type": "Хабарлама түрін таңдаңыз:\n1. Шағым\n2. Ұсыныс",
+		"invalid_type": "Өтінемін дұрыс нұсқаны таңдаңыз:\n1. Шағым\n2. Ұсыныс",
+		"feedback": "Өз пікіріңізді жазыңыз! 😊",
+		"end_feedback": "Пікіріңізге рахмет! 😊",
+	},
+	"ru": {
+		"choose_language": "Сәлем! 🌐Қызмет көрсету тілін таңдаңыз\n🌐Выберите язык обслуживания\n\n1. Қазақ тілі\n2. Русский язык",
+		"invalid_language": "🌐Ұсынылған сандардың бірін таңдаңыз\n🌐Выберите одну из предложенных цифр\n\n1. Қазақ тілі\n2. Русский язык",
+		"choose_address": "Пожалуйста, выберите адрес:",
+		"invalid_address": "Пожалуйста, выберите правильный номер адреса:",
+		"choose_type": "Выберите тип сообщения:\n1. Жалоба\n2. Предложение",
+		"invalid_type": "Пожалуйста, выберите правильный вариант:\n1. Жалоба\n2. Предложение",
+		"feedback": "Напишите ваш отзыв! 😊",
+		"end_feedback": "Спасибо за ваш отзыв! 😊",
+	},
+}
+
+func getMessage(lang, key string) string {
+	if lang == "" {
+		lang = "ru" // default to English
+	}
+	if val, ok := messages[lang][key]; ok {
+		return val
+	}
+	return messages["ru"][key] // fallback to English
 }
