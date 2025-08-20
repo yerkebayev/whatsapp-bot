@@ -16,6 +16,7 @@ import (
 	"sync/atomic"
 	"syscall"
 	"time"
+	"strconv"
 
 	_ "github.com/mattn/go-sqlite3"
 	"github.com/mdp/qrterminal/v3"
@@ -77,7 +78,7 @@ type ClientState struct {
 	LastActivity time.Time // track last message time
 }
 
-const conversationTimeout = 2 * time.Minute
+const conversationTimeout = 1 * time.Minute
 
 
 func main() {
@@ -272,10 +273,6 @@ func getAddresses() ([]Address, error) {
 		if err != nil {
 			return nil, err
 		}
-	
-		addr.title = extractStreetAndNumber(addr.title)
-		fmt.Println("Street & number:", addr.title)
-	
 		addresses = append(addresses, addr)
 	}
 	
@@ -419,107 +416,6 @@ func deleteMessageFromDB(messageId string) (bool, error) {
 		return false, fmt.Errorf("failed to delete message from database: %v", err)
 	}
 	return true, nil
-}
-
-func sendRecordToCentralDepository(recordCount int) error {
-	if mainPhone == "" {
-		row, err := db.Query("SELECT jid FROM whatsmeow_device limit 1")
-		if err != nil {
-			mainPhone = ""
-		}
-		defer row.Close()
-		for row.Next() {
-			var jid = ""
-			if err := row.Scan(&jid); err != nil {
-				mainPhone = ""
-			}
-			mainPhone = SubstringBefore(jid, ":")
-		}
-	}
-	log.Infof("Jid = %s", mainPhone)
-	rows, err := db.Query("SELECT message_id, phone, message_type, text, date_time FROM messages limit ?", recordCount)
-	if err != nil {
-		return fmt.Errorf("Failed to query messages: %v", err)
-	}
-	defer rows.Close()
-
-	var messages []Message
-	for rows.Next() {
-		var messageID, phone, msgType, text, dateTime string
-		if err := rows.Scan(&messageID, &phone, &msgType, &text, &dateTime); err != nil {
-			return fmt.Errorf("Failed to scan message: %v", err)
-		}
-		messages = append(messages, Message{
-			messageID: messageID,
-			phone:     phone,
-			msgType:   msgType,
-			text:      text,
-			dateTime:  dateTime,
-		})
-		log.Infof("Message ID: %s", messageID)
-	}
-	for _, message := range messages {
-		if message.text == "" {
-			_, err := deleteMessageFromDB(message.messageID)
-			if err != nil {
-				log.Errorf("Failed to delete message from database: %v", err)
-			}
-		} else {
-			var clientId = SubstringBefore(message.phone, "@")
-			var fromMe = clientId == mainPhone
-
-			if fromMe {
-				clientId = SubstringBefore(SubstringAfter(message.phone, " in "), "@")
-			}
-			if strings.Contains(clientId, ":") {
-				clientId = SubstringBefore(message.phone, ":")
-			}
-			// data := &CDMessage{
-			// 	ClientId:    clientId,
-			// 	Type:        message.msgType,
-			// 	Message:     message.text,
-			// 	FromClient:  !fromMe,
-			// 	MessageType: "test",
-			// }
-			// jsonData, err := json.Marshal(data)
-			// if err != nil {
-			// 	log.Errorf("Failed to generate JSON: %v", err)
-			// } else {
-			// 	log.Infof("JSON: %s", string(jsonData))
-
-				// r, err := http.NewRequest("POST", *depositoryUrl, bytes.NewBuffer(jsonData))
-				// if err != nil {
-					// log.Errorf("Failed to create request: %v", err)
-				// }
-
-				// r.Header.Add("Content-Type", "application/json")
-
-				// client := &http.Client{}
-				// res, err := client.Do(r)
-				// if err != nil {
-				// 	log.Errorf("Failed to create request: %v", err)
-				// }
-
-				// defer res.Body.Close()
-
-				// post := res.Body
-
-				// if res.StatusCode != http.StatusCreated {
-				// 	log.Errorf("Failed to create request: %v", err)
-				// } else {
-				// 	log.Infof("Create record with ID: %s", post)
-				// 	_, err := deleteMessageFromDB(message.messageID)
-				// 	if err != nil {
-				// 		log.Errorf("Failed to delete message from database: %v", err)
-				// 	}
-				// }
-
-			// }
-		}
-	}
-	messages = nil
-	return nil
-
 }
 
 func SubstringBefore(str string, sep string) string {
@@ -846,43 +742,75 @@ func receiveHandler(rawEvt interface{}) {
 						return
 					 }
 					
+					fmt.Println(state.Language,  lang)
 					// 🔹 Build numbered list
 					var msgBuilder strings.Builder
 					msgBuilder.WriteString(getMessage(state.Language, "choose_address") + "\n")
 					for i, addr := range addresses {
-						msgBuilder.WriteString(fmt.Sprintf("%d. %s\n", i+1, addr))
+						msgBuilder.WriteString(fmt.Sprintf("%d. %s\n", i+1, addr.title))
 					}
 					SendMessageTo(client, sender, msgBuilder.String())
 				case "choose_address":
 					addrID := text
-					if addrID == "" {
-						addresses, err1 := getAddresses()
-						if err1 != nil {
-							log.Errorf("Failed to get addresses: %v", err)
-							return
-						 }
+					addresses, err1 := getAddresses()
+					if err1 != nil {
+						log.Errorf("Failed to get addresses: %v", err)
+						return
+					 }
+
+					 valid := false
+					 // First, try to parse addrID as integer
+
+					 if idx, err := strconv.Atoi(addrID); err == nil {
+						// Check if the number is within range
+						if idx >= 1 && idx <= len(addresses) {
+							// Use the corresponding addressId from the slice
+							addrID = addresses[idx-1].addressId
+							valid = true
+						}
+					} else {
+						// If not a number, check if it matches any addressId string
+						for _, addr := range addresses {
+							if addrID == addr.addressId {
+								valid = true
+								break
+							}
+						}
+					}
+
+					if !valid {
 						
 						// 🔹 Build numbered list
 						var msgBuilder strings.Builder
 						msgBuilder.WriteString(getMessage(state.Language, "invalid_address") + "\n")
 						for i, addr := range addresses {
-							msgBuilder.WriteString(fmt.Sprintf("%d. %s\n", i+1, addr))
+							msgBuilder.WriteString(fmt.Sprintf("%d. %s\n", i+1, addr.title))
 						}
 						SendMessageTo(client, sender, msgBuilder.String())
 						return
 					}
 					state.AddressID = addrID
 					state.CurrentStep = "choose_type"
-					SendMessageTo(client, sender, "Хабарлама түрін таңдаңы:\n1. Good\n2. Hate")
+					SendMessageTo(client, sender, getMessage(state.Language, "choose_type"))
 				case "choose_type":
 					msgGoodOrBad := text
 					if msgGoodOrBad == "" {
-						SendMessageTo(client, sender, "Please select a valid message number:\n1. Shop A\n2. Shop B")
+						addresses, err1 := getAddresses()
+						if err1 != nil {
+							log.Errorf("Failed to get addresses: %v", err)
+							return
+						 }
+						var msgBuilder strings.Builder
+						msgBuilder.WriteString(getMessage(state.Language, "invalid_address") + "\n")
+						for i, addr := range addresses {
+							msgBuilder.WriteString(fmt.Sprintf("%d. %s\n", i+1, addr.title))
+						}
+						SendMessageTo(client, sender, msgBuilder.String())
 						return
 					}
 					state.MsgGoodOrBad = msgGoodOrBad
 					state.CurrentStep = "process"
-					SendMessageTo(client, sender, "Write your feedback down! 😊")
+					SendMessageTo(client, sender, getMessage(state.Language, "feedback"))
 
 					if err := SaveClientState(state); err != nil {
 						log.Errorf("Failed to save client state: %v", err)
@@ -1464,7 +1392,7 @@ func clientStateChecker(ctx context.Context, interval time.Duration, client *wha
 					SendMessageTo(client, receiver, getMessage(state.Language, "end_feedback"))
 			
 					// Reset conversation
-					state.CurrentStep = "choose_language"
+					state.CurrentStep = ""
 					state.Language = ""
 					state.AddressID = ""
 					state.MsgGoodOrBad = ""
@@ -1483,7 +1411,7 @@ func clientStateChecker(ctx context.Context, interval time.Duration, client *wha
 
 // 1. Define translations
 var messages = map[string]map[string]string{
-	"kz": {
+	"kk": {
 		"choose_language": "Сәлем! 🌐Қызмет көрсету тілін таңдаңыз\n🌐Выберите язык обслуживания\n\n1. Қазақ тілі\n2. Русский язык",
 		"invalid_language": "🌐Ұсынылған сандардың бірін таңдаңыз\n🌐Выберите одну из предложенных цифр\n\n1. Қазақ тілі\n2. Русский язык",
 		"choose_address": "Мекенжайды таңдаңыз:",

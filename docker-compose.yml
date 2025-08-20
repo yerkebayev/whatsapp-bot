@@ -14,7 +14,6 @@ services:
       - DB_DIALECT=sqlite3
       - DEBUG=true
       - REQUEST_FULL_SYNC=false
-      - DEPO_URL=https://devapi.courstore.com/v1/dialog
     networks:
       - app-network
 
