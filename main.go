@@ -81,6 +81,8 @@ const conversationTimeout = 2 * time.Minute
 
 
 func main() {
+	fmt.Println("Starting WhatsApp bot...")
+
 	waBinary.IndentXML = true
 
 	flag.Parse()
