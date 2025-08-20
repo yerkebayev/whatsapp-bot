@@ -211,7 +211,7 @@ func main() {
 	defer cancel()
 
 	// Run checker every 1 minute
-	go clientStateChecker(ctx, 1*time.Second, client)
+	go clientStateChecker(ctx, 1*time.Minute, client)
 
 	if os.Getenv("DOCKER_MODE") == "true" || os.Getenv("SYSTEMD_MODE") == "true" {
 		select {} // Prevent the application from exiting in Docker mode
