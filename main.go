@@ -43,7 +43,7 @@ var (
 	pairRejectChan  = make(chan bool, 1)
 	historySyncID   int32
 	startupTime     = time.Now()
-	mainPhone       = "77009809778"
+	mainPhone       = "77716897633"
 )
 
 var db *sql.DB
