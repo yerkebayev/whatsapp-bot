@@ -38,7 +38,7 @@ var (
 	logLevel        = "INFO"
 	debugLogs       = flag.Bool("debug", false, "Enable debug logs?")
 	dbDialect       = flag.String("db-dialect", "sqlite3", "Database dialect (sqlite3 or postgres)")
-	dbAddress       = flag.String("db-address", "./whatsapp.db?_foreign_keys=on", "Database address")
+	dbAddress       = flag.String("db-address", "/var/www/whatsapp-bot/whatsapp.db?_foreign_keys=on", "Database address")
 	requestFullSync = flag.Bool("request-full-sync", false, "Request full (1 year) history sync when logging in?")
 	pairRejectChan  = make(chan bool, 1)
 	historySyncID   int32
