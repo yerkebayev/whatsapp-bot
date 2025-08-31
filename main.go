@@ -38,7 +38,7 @@ var (
 	logLevel        = "INFO"
 	debugLogs       = flag.Bool("debug", false, "Enable debug logs?")
 	dbDialect       = flag.String("db-dialect", "sqlite3", "Database dialect (sqlite3 or postgres)")
-	dbAddress       = flag.String("db-address", "/var/www/whatsapp-bot/whatsapp.db?_foreign_keys=on", "Database address")
+	dbAddress       = flag.String("db-address", "./whatsapp.db?_foreign_keys=on", "Database address")
 	requestFullSync = flag.Bool("request-full-sync", false, "Request full (1 year) history sync when logging in?")
 	pairRejectChan  = make(chan bool, 1)
 	historySyncID   int32
@@ -705,9 +705,8 @@ func receiveHandler(rawEvt interface{}) {
 				log.Errorf("Failed to get client state: %v", err)
 				return
 	     	}
-
 			// Save message to Database
-			err = writeMessageToDB(event.Info.ID, event.Info.SourceString(), msgType, text, event.Info.Timestamp.String(), state)
+			err = writeMessageToDB(event.Info.ID, event.Info.SourceString(), msgType, text, time.Now().Format(time.RFC3339), state)
 
 			if err != nil {
 				log.Errorf("Failed to write message to database: %v", err)
@@ -868,7 +867,7 @@ func SendMessageTo(client *whatsmeow.Client, receiver types.JID, text string, st
 
     // Build DB parameters
     messageID := resp.ID                        // message ID returned by WhatsApp
-    jids := fmt.Sprintf("%s jid %s", client.Store.ID.ToNonAD().String(), userJid.String()) // sender + receiver
+    jids := fmt.Sprintf("%s jid %s", client.Store.ID.String(), userJid.String()) // sender + receiver
     msgType := "text"                           // hardcode or detect based on msg
     dateTime := time.Now().Format(time.RFC3339) // current timestamp
 
