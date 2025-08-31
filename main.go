@@ -49,17 +49,16 @@ var (
 var db *sql.DB
 
 type Message struct {
-	ID        int64
-	messageID string
-	language string
-	addressId string
-	phone     string
-	msgGoodOrBad string
-	msgType   string
-	text      string
-	fileId    string
-    answerForMessageId string
-	dateTime  string
+	ID                int64  `db:"id"`       
+	MessageID         string `db:"message_id"`
+	Language          string `db:"language"`
+	AddressID         string `db:"address_id"`
+	FromPhone         string `db:"from_phone"`
+	ToPhone           string `db:"to_phone"`
+	MsgGoodOrBad      string `db:"msgGoodOrBad"`
+	MessageType       string `db:"message_type"`
+	Text              string `db:"text"`
+	DateTime          string `db:"date_time"`
 }
 
 type Address struct {
@@ -326,6 +325,10 @@ func writeMessageToDB(messageID, jids, msgType, text, dateTime string, state *Cl
         return fmt.Errorf("failed to parse receiver JID: %s", receiverJIDStr)
     }
     toPhone := receiver.User
+
+	if fromPhone == toPhone {
+		toPhone = mainPhone
+	}
 
     fmt.Printf("Sender: %s, Receiver: %s\n", fromPhone, toPhone)
 
@@ -696,12 +699,19 @@ func receiveHandler(rawEvt interface{}) {
 			msgType = event.Info.Type
 		}
 		sender := event.Info.Sender
-		if sender.User != mainPhone {
+		if sender.User != mainPhone && text != "" {
 			state, err := GetClientState(sender.User)
 			if err != nil {
 				log.Errorf("Failed to get client state: %v", err)
 				return
 	     	}
+
+			// Save message to Database
+			err = writeMessageToDB(event.Info.ID, event.Info.SourceString(), msgType, text, event.Info.Timestamp.String(), state)
+
+			if err != nil {
+				log.Errorf("Failed to write message to database: %v", err)
+			}
 
 			startBoolean := false
 
@@ -710,7 +720,7 @@ func receiveHandler(rawEvt interface{}) {
 					Phone:       sender.User,
 					CurrentStep: "choose_language",
 				}
-				SendMessageTo(client, sender, getMessage("ru", "choose_language"))
+				SendMessageTo(client, sender, getMessage("ru", "choose_language"), state)
 				startBoolean = true
 			} else {
 				// Check timeout
@@ -719,7 +729,7 @@ func receiveHandler(rawEvt interface{}) {
 					state.Language = ""
 					state.AddressID = ""
 					state.MsgGoodOrBad = ""
-				    SendMessageTo(client, sender, getMessage("ru", "choose_language"))
+				    SendMessageTo(client, sender, getMessage("ru", "choose_language"), state)
 					startBoolean = true
 				}
 			}
@@ -730,7 +740,7 @@ func receiveHandler(rawEvt interface{}) {
 				case "choose_language":
 					lang := parseLanguageChoice(text)
 					if lang == "" {
-						SendMessageTo(client, sender, getMessage("ru", "invalid_language"))
+						SendMessageTo(client, sender, getMessage("ru", "invalid_language"), state)
 						return
 					}
 					state.Language = lang
@@ -749,7 +759,7 @@ func receiveHandler(rawEvt interface{}) {
 					for i, addr := range addresses {
 						msgBuilder.WriteString(fmt.Sprintf("%d. %s\n", i+1, addr.title))
 					}
-					SendMessageTo(client, sender, msgBuilder.String())
+					SendMessageTo(client, sender, msgBuilder.String(), state)
 				case "choose_address":
 					addrID := text
 					addresses, err1 := getAddresses()
@@ -786,12 +796,12 @@ func receiveHandler(rawEvt interface{}) {
 						for i, addr := range addresses {
 							msgBuilder.WriteString(fmt.Sprintf("%d. %s\n", i+1, addr.title))
 						}
-						SendMessageTo(client, sender, msgBuilder.String())
+						SendMessageTo(client, sender, msgBuilder.String(), state)
 						return
 					}
 					state.AddressID = addrID
 					state.CurrentStep = "choose_type"
-					SendMessageTo(client, sender, getMessage(state.Language, "choose_type"))
+					SendMessageTo(client, sender, getMessage(state.Language, "choose_type"), state)
 				case "choose_type":
 					msgGoodOrBad := text
 					if msgGoodOrBad == "" {
@@ -805,12 +815,12 @@ func receiveHandler(rawEvt interface{}) {
 						for i, addr := range addresses {
 							msgBuilder.WriteString(fmt.Sprintf("%d. %s\n", i+1, addr.title))
 						}
-						SendMessageTo(client, sender, msgBuilder.String())
+						SendMessageTo(client, sender, msgBuilder.String(), state)
 						return
 					}
 					state.MsgGoodOrBad = msgGoodOrBad
 					state.CurrentStep = "process"
-					SendMessageTo(client, sender, getMessage(state.Language, "feedback"))
+					SendMessageTo(client, sender, getMessage(state.Language, "feedback"), state)
 
 					if err := SaveClientState(state); err != nil {
 						log.Errorf("Failed to save client state: %v", err)
@@ -838,25 +848,35 @@ func receiveHandler(rawEvt interface{}) {
 					log.Errorf("Failed to save client state: %v", err)
 				}
 			}
-
-			// Save message to Database
-			err = writeMessageToDB(event.Info.ID, event.Info.SourceString(), msgType, text, event.Info.Timestamp.String(), state)
-
-			if err != nil {
-				log.Errorf("Failed to write message to database: %v", err)
-			}
 		}
 	}
 }
 
-func SendMessageTo(client *whatsmeow.Client, receiver types.JID, text string) {
-	msg := &waProto.Message{
-		Conversation: proto.String(text),
-	}
-	_, err := client.SendMessage(context.Background(), receiver, msg)
-	if err != nil {
-		log.Errorf("Failed to send message to %s: %v", receiver, err)
-	}
+func SendMessageTo(client *whatsmeow.Client, receiver types.JID, text string, state *ClientState) {
+    msg := &waProto.Message{
+        Conversation: proto.String(text),
+    }
+
+	userJid := receiver.ToNonAD()
+
+	fmt.Println(userJid.String())
+    resp, err := client.SendMessage(context.Background(), userJid, msg)
+    if err != nil {
+        log.Errorf("Failed to send message to %s: %v", userJid, err)
+        return
+    }
+
+    // Build DB parameters
+    messageID := resp.ID                        // message ID returned by WhatsApp
+    jids := fmt.Sprintf("%s jid %s", client.Store.ID.ToNonAD().String(), userJid.String()) // sender + receiver
+    msgType := "text"                           // hardcode or detect based on msg
+    dateTime := time.Now().Format(time.RFC3339) // current timestamp
+
+	fmt.Println(jids, " in send")
+    err = writeMessageToDB(messageID, jids, msgType, text, dateTime, state)
+    if err != nil {
+        log.Errorf("Failed to write outgoing message to database: %v", err)
+    }
 }
 
 func containsAddress(text string, addresses []Address) *Address {
@@ -1389,7 +1409,7 @@ func clientStateChecker(ctx context.Context, interval time.Duration, client *wha
 						log.Errorf("Invalid phone/JID: %s", state.Phone)
 						continue
 					}
-					SendMessageTo(client, receiver, getMessage(state.Language, "end_feedback"))
+					SendMessageTo(client, receiver, getMessage(state.Language, "end_feedback"), &state)
 			
 					// Reset conversation
 					state.CurrentStep = ""
